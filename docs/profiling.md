@@ -204,8 +204,13 @@ Before any change, the estimate for H1 + H2 + H3 was about 11–13 s first run o
   meaningless here in both directions (parallel compile ↓, oversubscribed execution ↑↑).
 
 ## 5. Questions for the Feyer team
-- Is setting `XLA_FLAGS` from inside `differometor/` allowed?
+
+Answered on 21 November 2026:
+- **Compiler flags:** allowed, provided the improvement carries over to other optical setups. Level 0 is
+  now set inside `differometor/`; see [XLA backend optimization level](performance.md#xla-backend-optimization-level).
+- **SciPy / non-JAX code:** allowed, as long as gradients can still be produced. The SuperLU path through
+  `jax.pure_callback` with `custom_linear_solve` is therefore legitimate.
+
+Still open:
 - How different can the final setup be: new component types, other frequency counts, several detectors?
   (The harness already covers multiple detectors, qhd, AM/FM modulation, sweeps.)
-- Is calling SciPy acceptable, or must everything be JAX ops? This is now relevant: the current build's
-  sparse LU calls SciPy SuperLU through `jax.pure_callback`.

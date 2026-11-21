@@ -159,9 +159,11 @@ Output shapes: carrier (286, 1), signal (751, 101), noise (101,).
 Rough target if hypotheses hold: 44 s → ~5–10 s first-run total. Post-profiling estimate (local): H1+H2+H3 → ~11–13 s (from 35.6), + H4 → ~8 s.
 
 ## 8. Grey areas — ask the Feyer team before relying on them
-- Whether calling SciPy (e.g. sparse LU via `pure_callback` + `custom_vjp`) is acceptable vs pure JAX ops.
+
+**Answered by the Feyer team (2026-11-21):** compiler flags are allowed if the gain carries over to other setups (→ `-O0` set in `differometor/__init__.py`, see docs/performance.md); non-JAX code such as SciPy is allowed as long as gradients can still be produced.
+
+Still open:
 - Persisting/serialising compiled executables or any compilation cache across runs (they deliberately disabled the cache → assume NOT allowed).
-- Setting `XLA_FLAGS` from inside `differometor/` (probably fine, confirm).
 - How different the final evaluation setup may be (new component types? different frequency count/range? multiple detectors?) — worth asking so the generality harness covers the right variations.
 
 ## 9. Gotchas found while profiling

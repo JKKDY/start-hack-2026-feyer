@@ -1,6 +1,6 @@
 # Differometor performance experiments
 
-The current build is `baseline-optimized`. It combines the packed sparse solver, static index arrays, a NumPy build step, and fixed setup parameters folded into the compiled program. The original `benchmark.py` passes on it. On the laptop described below, the first run including JIT fell from **63.13 s to about 12 s**, and the warm median from **33.278 s to about 0.31 s**. The [correctness harness](correctness-harness.md) passes all 13 setups at nominal and fuzzed parameters. The strict elementwise comparison of raw signal fields still reports differences in the sparse modes; see [Signal-field stability](#signal-field-stability). Profiling that guided these steps is in [Profiling findings](profiling.md).
+The current build is `baseline-optimized`. It combines the packed sparse solver, static index arrays, a NumPy build step, fixed setup parameters folded into the compiled program, and LLVM `-O0` compilation set inside `differometor/` (see [XLA backend optimization level](#xla-backend-optimization-level)). The original `benchmark.py` passes on it. On the laptop described below, the first run including JIT fell from **63.13 s to about 12 s**, and the warm median from **33.278 s to about 0.31 s**. The [correctness harness](correctness-harness.md) passes all 13 setups at nominal and fuzzed parameters. The strict elementwise comparison of raw signal fields still reports differences in the sparse modes; see [Signal-field stability](#signal-field-stability). Profiling that guided these steps is in [Profiling findings](profiling.md).
 
 ## Accepted optimization history
 
@@ -39,6 +39,7 @@ The harness compares each build with references from the unmodified simulator on
 | `31e6aac`, packed solver | All 13 pass | 16.9, 0.304 | 1.4e-7 / 4.9e-8 |
 | `71dc5eb`, packed default | All 13 pass, same errors as `31e6aac` packed | 15.1, 0.304 | 1.4e-7 / 4.9e-8 |
 | `6e66e96`, packed default | All 13 pass, same errors as `31e6aac` packed | 13.1, 0.336 | 1.4e-7 / 4.9e-8 |
+| `0869f42` + level 0 (WSL laptop, not comparable with the rows above) | All 13 pass | 6.5, 0.201 | 1.4e-7 / 5.1e-8 |
 
 `voyager_fm` has an almost zero detected signal, so its sensitivity and gradient are set by round-off. The packed path's errors there, 6.7e-2 and 1.2e-3, are within its round-off floors of 2.7 and 0.90.
 
@@ -104,7 +105,20 @@ Warm repeats ranged from 10.4 to 24.2 s. The branch kept dense solves and was no
 | `67ceed2` | none | 12.05 | 8.89 | 0.309 |
 | `67ceed2` | set directly | 11.74 | 8.49 | 0.316 |
 
-The flag mainly shortens gradient compilation. After the fixed parameters were folded in, its gain is 0.3 s, which is within run-to-run noise. Warm time is unchanged. The flag is not adopted: the scored run uses the original `benchmark.py`, so it would have to be set inside `differometor/`. The organisers have not said whether that is allowed. `71b231d` itself is not part of `baseline-optimized`.
+The flag mainly shortens gradient compilation. After the fixed parameters were folded in, level 1 gains 0.3 s, which is within run-to-run noise. Warm time is unchanged. `71b231d` itself is not part of `baseline-optimized`.
+
+### Adopted: level 0 set inside `differometor/`
+
+The organisers confirmed on 21 November 2026 that compiler flags are allowed, provided the improvement carries over to other optical setups. Level **0**, not 1, is where the gain is: LLVM's machine-code optimisation dominates compilation, while the heavy linear algebra runs in precompiled LAPACK and SuperLU. `differometor/__init__.py` appends `--xla_backend_optimization_level=0` to `XLA_FLAGS` at import. The original `benchmark.py` imports the package before it initialises the CPU backend, so the flag applies, and the report records it under `xla_flags`. A level already set by the user is kept, and `DIFFEROMETOR_KEEP_XLA_FLAGS=1` disables the behaviour. The change was written on `chris/xla-flags` (`2402e5b`) and applied to `baseline-optimized` on top of `0869f42`.
+
+These times come from **a different machine** from the tables above: Intel Core Ultra 7 255H (16 logical CPUs, 1 used via `--cpus 1`), WSL2 Ubuntu 24.04 with 24 GB allocated, Python 3.12.3, JAX and jaxlib 0.9.0. Do not compare them with the Windows laptop's numbers. Each cell is the median of 3 fresh processes, run interleaved with the control, original `benchmark.py`, `--repeats 3`. The control is the same commit with `DIFFEROMETOR_KEEP_XLA_FLAGS=1`.
+
+| Build (WSL laptop) | First incl. JIT (s) | JIT (s) | Warm (s) | Individual first runs (s) |
+| --- | ---: | ---: | ---: | --- |
+| `0869f42`, no flag | 6.14 | 5.58 | 0.182 | 6.44, 6.10, 6.14 |
+| `0869f42` + level 0 | **3.99** | **3.42** | 0.195 | 4.20, 3.99, 3.99 |
+
+Forward compilation fell from 3.26 s to 1.82 s and gradient compilation from 1.47 s to 0.78 s. Every run passed, with a maximum log-sensitivity error of 5.37e-6 and the gradient spot check passing. The gain carries over: on the same machine, every harness setup's per-case first run was 1.9–2.4 s faster with the flag (1.1 s for `cavity_tuning`), with unchanged errors. Warm time rose by about 0.01 s.
 
 ## Benchmarking further changes
 

@@ -1442,6 +1442,69 @@ def build(setup: Setup):
     )
 
 
+
+
+def group_functions(function_input_indices, function_indices, output_indices, matrix_indices):
+    """Precompute a gather-based execution plan for a fixed optical topology.
+
+    Function choice is resolved on the host. Each FUNCTIONS slot stores only
+    the inputs and output coordinates needed by that function. Group results are
+    concatenated and restored to original output order with one gather, avoiding
+    the repeated output scatters used by the first topology experiment.
+
+    Setups with duplicate destination matrix entries conservatively retain the
+    upstream dynamic dispatcher.
+    """
+    kinds = np.asarray(function_indices, dtype=np.int64)
+    inputs = np.asarray(function_input_indices, dtype=np.int64)
+    outputs = np.asarray(output_indices, dtype=np.int64)
+    targets = np.asarray(matrix_indices, dtype=np.int64)
+    if kinds.ndim != 1 or inputs.ndim != 2 or inputs.shape[0] != kinds.size:
+        raise ValueError("Function ids and input rows must align")
+    if outputs.ndim != 2 or outputs.shape[0] != 2 or targets.shape != outputs.shape:
+        raise ValueError("Output and matrix index arrays must have shape (2, M)")
+    if np.any(kinds < 0) or np.any(kinds >= len(FUNCTIONS)):
+        raise ValueError("Component function id is outside FUNCTIONS registry")
+
+    rows = np.where(outputs[0] < 0, outputs[0] + kinds.size, outputs[0])
+    if np.any(rows < 0) or np.any(rows >= kinds.size):
+        raise ValueError("Output row index is outside component functions")
+
+    if np.unique(targets.T, axis=0).shape[0] != targets.shape[1]:
+        return jnp.asarray(kinds, dtype=int)
+
+    groups = []
+    grouped_slots = []
+    selected = np.zeros(outputs.shape[1], dtype=bool)
+    for kind in range(len(FUNCTIONS)):
+        members = np.flatnonzero(kinds == kind)
+        if not members.size:
+            groups.append(None)
+            continue
+        slots = np.flatnonzero(np.isin(rows, members))
+        if not slots.size:
+            groups.append(None)
+            continue
+        local_rows = np.searchsorted(members, rows[slots])
+        if not np.array_equal(members[local_rows], rows[slots]):
+            raise AssertionError("Could not remap output rows into function group")
+        selected[slots] = True
+        grouped_slots.append(slots)
+        groups.append((
+            jnp.asarray(inputs[members], dtype=int),
+            jnp.asarray(local_rows, dtype=int),
+            jnp.asarray(outputs[1, slots], dtype=int),
+        ))
+    if not selected.all():
+        raise AssertionError("Some matrix outputs were not assigned a component function")
+
+    concatenated_slots = np.concatenate(grouped_slots)
+    if not np.array_equal(np.sort(concatenated_slots), np.arange(outputs.shape[1])):
+        raise AssertionError("Grouped output slots must be a permutation")
+    restore_order = np.argsort(concatenated_slots)
+    return tuple(groups), jnp.asarray(restore_order, dtype=int)
+
+
 def pairs_to_arrays(
     parameter_instructions: dict,
     signal_instructions: dict,
@@ -1657,7 +1720,7 @@ def pairs_to_arrays(
 
             return (
                 jnp.array(function_input_indices, dtype=int),
-                jnp.array(arrays["function_indices"], dtype=int),
+                group_functions(function_input_indices, arrays["function_indices"], output_indices, system_matrix_indices),
                 jnp.array(output_indices, dtype=int),
                 jnp.array(system_matrix_indices, dtype=int),
                 jnp.array(carrier_solution_indices, dtype=int),
@@ -1666,7 +1729,7 @@ def pairs_to_arrays(
 
         return (
             jnp.array(function_input_indices, dtype=int),
-            jnp.array(arrays["function_indices"], dtype=int),
+            group_functions(function_input_indices, arrays["function_indices"], output_indices, system_matrix_indices),
             jnp.array(output_indices, dtype=int),
             jnp.array(system_matrix_indices, dtype=int),
         )

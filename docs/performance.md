@@ -1,18 +1,37 @@
 # Differometor performance experiments
 
-The optimization branch retains three changes. It evaluates quantum noise as a quadratic form, groups optical component calls by function, and constructs detector selections without tiling. The final Windows run took **41.50 s including JIT**, down from **55.06 s** with the quadratic-form change alone. The warm median fell from **26.03 s to 18.57 s**.
+The packed sparse build is accepted for the benchmark workload. It passed the supplied sensitivity and gradient checks, and all 193 gradient values agreed with the original within the additional comparison tolerance at both tested parameter points. The local first-run time, including JIT, fell from **63.13 s to 16.80 s**. The warm median fell from **33.278 s to 0.227 s**. The strict elementwise comparison of raw signal fields still reports differences in the sparse modes.
 
-## Results
+## Accepted optimization history
 
-All runs used one pinned logical CPU on an Intel Core i7-11370H, native Windows, Python 3.12.10, JAX and JAXLIB 0.9.0, and double precision. The benchmark evaluated the saved 3×3 UIFO at 101 frequencies with 193 design variables. Each row reports one complete first run and the median of three warm evaluations. JIT time includes tracing, lowering, and compilation. Memory columns report the Windows process peaks during the measured workload, before validation.
+The table tracks cumulative builds on one pinned logical CPU on an Intel Core i7-11370H, with native Windows, Python 3.12.10, JAX and JAXLIB 0.9.0, and double precision. Every run used the saved 3×3 UIFO, 101 frequencies, and 193 design variables. Timings are one complete first run and the median of three warm evaluations. The first-run total includes JIT tracing, lowering, and compilation.
+
+| Cumulative build | First incl. JIT (s) | JIT (s) | Warm (s) | Reference sensitivity check, max log error | Gradient spot check, max abs. error | Full gradient relative L2 error | Max per-frequency signal relative L2 error | Strict signal entry mismatches |
+| --- | ---: | ---: | ---: | --- | --- | --- | --- | ---: |
+| Original dense simulator (`3b538f0`) | 63.13 | 26.91 | 33.278 | Pass (5.38e-6) | Pass (3.83e-7) | 0 / 0 | 0 / 0 | 0 / 0 |
+| Noise quadratic form (`4a2c3d0`) | 55.06 | 27.08 | 26.028 | Pass (5.38e-6) | Pass (6.97e-7) | 1.90e-8 / 1.31e-7 | 0 / 0 | 0 / 0 |
+| Grouped component evaluation (`3e030f4`) | 44.36 | 14.25 | 18.578 | Pass (5.38e-6) | Pass (6.97e-7) | 1.90e-8 / 1.31e-7 | 0 / 0 | 0 / 0 |
+| Detector selections without tiling (`089afa2`) | 41.50 | 15.62 | 18.567 | Pass (5.38e-6) | Pass (6.97e-7) | 1.90e-8 / 1.31e-7 | 0 / 0 | 0 / 0 |
+| Shared sparse LU with dense assembly | 34.16 | 13.99 | 8.366 | Pass (5.37e-6) | Pass (1.32e-8) | 2.20e-9 / 1.22e-7 | 2.04e-7 / 1.45e-7 | 3,427 / 3,433 |
+| Packed sparse signal assembly | 19.10 | 13.29 | 1.959 | Pass (5.37e-6) | Pass (1.32e-8) | 2.20e-9 / 1.22e-7 | 2.04e-7 / 1.45e-7 | 3,427 / 3,433 |
+| Packed signal and noise, benchmark default (`47cc00a`) | **16.80** | **12.66** | **0.227** | Pass (5.37e-6) | Pass (1.32e-8) | 2.31e-9 / 1.22e-7 | 2.04e-7 / 1.45e-7 | 3,427 / 3,433 |
+
+The original row is the fresh local dense calibration. The repository's [published CPU baseline](../benchmarks/cpu-baseline.json) was measured on a different host and recorded 44.20 s first run, 22.92 s JIT, and 17.68 s warm. The fully packed prototype previously recorded 18.34 s first run and 0.248 s warm. The table uses its later verification run as the default.
+
+### How to read the numerical checks
+
+- **Sensitivity.** Maximum absolute difference in natural log sensitivity from the public curve across the 101 frequencies. The supplied limit is `1e-5`.
+- **Gradient spot check.** Maximum absolute difference between autodiff and the two central-difference estimates for `mb11.tuning`. Each comparison uses the benchmark's `rtol=0.01, atol=1e-6`. The two finite-difference estimates must also agree within that tolerance.
+- **Full-gradient and field comparisons.** Paired values are for the saved parameters and for `mb11.tuning` increased by 0.002, each against the original at that same point. All 193 gradient coordinates passed `rtol=1e-3, atol=1e-7`. Carrier fields and powers matched exactly. Quantum noise and sensitivity arrays matched within `rtol=1e-5, atol=0`. The signal comparison uses the largest relative L2 error across individual frequency vectors and counts entries outside the separate `rtol=1e-5, atol=1e-12` elementwise check. All rows produced finite outputs and gradients with the expected shapes, including the full 751 × 101 signal field.
+
+## Earlier dense experiments
+
+The first structural trials below were tested on top of the quadratic-form baseline. Memory figures are Windows process peaks during the measured workload, before validation.
 
 | Variant | First run (s) | JIT (s) | Warm (s) | Working set (GiB) | Private commit (GiB) | Decision |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| Noise quadratic form (`4a2c3d0`) | 55.06 | 27.08 | 26.03 | 7.83 | 15.43 | Retained baseline |
 | Compact covariance | 66.60 | 29.94 | 18.73 | 7.12 | 12.89 | Dropped |
-| Shared signal and adjoint LU factors | 56.67 | 27.38 | 16.87 | 8.01 | 13.76 | Dropped |
-| Grouped component evaluation (`3e030f4`) | 44.36 | 14.25 | 18.58 | 8.57 | 15.03 | Retained |
-| Detector selections without tiling (`089afa2`) | 41.50 | 15.62 | 18.57 | 8.33 | 15.03 | Retained |
+| Shared dense signal and adjoint LU factors | 56.67 | 27.38 | 16.87 | 8.01 | 13.76 | Dropped |
 
 Compact covariance, shared LU, and grouped component evaluation were each tested on top of the quadratic-form baseline. The detector selection change was tested on top of grouped evaluation.
 
@@ -21,12 +40,6 @@ Compact covariance, shared LU, and grouped component evaluation were each tested
 - **Shared LU.** One signal factorization serviced both the signal and adjoint solves, with implicit differentiation through the linear systems. Its warm time improved, but its first runs took 56.67 s and 54.29 s against control runs of 55.06 s and 53.05 s.
 - **Grouped component evaluation.** The builder groups calls by function and restores the original coefficient order before scattering. This reduced JIT time by about 47% against the quadratic-form baseline.
 - **Detector selections without tiling.** The carrier multiplication broadcasts the sideband selections, then concatenates them with the extra degrees of freedom. The repeat took 40.98 s with the change and 41.22 s without it. Warm performance was effectively unchanged.
-
-## Numerical checks
-
-Every trial passed the benchmark's reference sensitivity check and its two-step finite-difference check for `mb11.tuning`. Additional comparisons covered carrier and signal fields, quantum noise, sensitivity, powers, and all 193 gradient components against the original simulator and the relevant control. These comparisons used the saved parameters and a second point with `mb11.tuning` increased by 0.002 in its native units.
-
-The final branch's gradient relative L2 difference from the original was **1.90×10⁻⁸** at the saved point and **1.31×10⁻⁷** at the perturbed point. The detector selection cleanup left the gradient unchanged at both points relative to grouped evaluation.
 
 ## Follow-up JAX experiments
 
@@ -66,16 +79,18 @@ The Windows experiments pinned the Python process externally before importing JA
 
 The experimental CPU path uses one SuperLU factorization per frequency to solve the signal system and its detector adjoint. JAX differentiates the linear systems implicitly, including the complex transpose solve in the backward pass. Sparse assembly then removes the dense frequency-batched signal matrix. Packing the covariance separately removes the dense noise batch by contracting its occupied entries with the detector weights.
 
-| Mode | First run incl. JIT (s) | JIT (s) | Warm median (s) | Peak working set (GiB) |
-| --- | ---: | ---: | ---: | ---: |
-| Dense reference | 41.50 | 15.62 | 18.57 | 8.33 |
-| Sparse solve, dense assembly | 34.16 | 13.99 | 8.37 | 6.66 |
-| Sparse solve and packed signal assembly | 19.10 | 13.29 | 1.96 | 3.85 |
-| Packed signal and noise covariance | 18.34 | 13.95 | 0.25 | 0.47 |
+| Cumulative build | Peak working set (GiB) | Peak private commit (GiB) |
+| --- | ---: | ---: |
+| Noise quadratic form | 7.83 | 15.43 |
+| Grouped component evaluation | 8.57 | 15.03 |
+| Detector selections without tiling | 8.33 | 15.03 |
+| Shared sparse LU with dense assembly | 6.66 | 8.23 |
+| Packed sparse signal assembly | 3.85 | 3.89 |
+| Packed signal and noise verification run | 0.51 | 0.54 |
 
 In a fresh cold rerun, the dense reference took 42.99 s including JIT and the fully packed mode took 18.05 s.
 
-All three sparse modes passed the standard reference sensitivity and finite-difference gradient checks on 101 frequencies. The fully packed result matched all 193 gradient coordinates within the experiment tolerance at the saved and perturbed points, with relative L2 differences of 1.74×10⁻⁸ and 2.53×10⁻⁷ against the dense control. Its largest per-frequency relative L2 signal-field error was 2.04×10⁻⁷. Individual signal entries still failed the earlier strict elementwise comparison, including entries close to zero relative to their field vectors.
+The table above uses the original simulator as its numerical reference. Against the last optimized dense build, the fully packed prototype's full-gradient relative L2 differences were 1.74×10⁻⁸ at the saved point and 2.53×10⁻⁷ at the perturbed point.
 
 On the 21-frequency grid, the new code's default dense path reproduced the previous physical outputs and loss bit for bit. Its maximum absolute gradient difference was 6.90×10⁻⁹.
 

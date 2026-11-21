@@ -1,0 +1,15 @@
+RESULT {"case": "n=751 1x solve", "compile": 0.485, "exec": 2.9}
+RESULT {"case": "n=751 3x solve (current)", "compile": 0.478, "exec": 5.317}
+RESULT {"case": "n=751 lu_factor + 3x lu_solve", "compile": 0.302, "exec": 2.856}
+   agreement max rel diff 5.2e-16
+   effective rate of one batched LU: 39.3 GFLOP/s (complex LU = 8/3 n^3 real flops)
+RESULT {"case": "n=612 1x solve", "compile": 0.34, "exec": 1.539}
+RESULT {"case": "n=612 3x solve (current)", "compile": 0.217, "exec": 2.915}
+RESULT {"case": "n=612 lu_factor + 3x lu_solve", "compile": 0.229, "exec": 1.617}
+   agreement max rel diff 5.2e-16
+   effective rate of one batched LU: 40.1 GFLOP/s (complex LU = 8/3 n^3 real flops)
+RESULT {"case": "n=264 1x solve", "compile": 0.181, "exec": 0.2}
+RESULT {"case": "n=264 3x solve (current)", "compile": 0.202, "exec": 0.367}
+RESULT {"case": "n=264 lu_factor + 3x lu_solve", "compile": 0.238, "exec": 0.225}
+   agreement max rel diff 4.7e-16
+   effective rate of one batched LU: 24.8 GFLOP/s (complex LU = 8/3 n^3 real flops)

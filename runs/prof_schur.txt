@@ -1,0 +1,9 @@
+  elimination [unit-diag, <=1 off-diag, zero fill (space-type rows)]: n 751 -> 612  (eliminated {'upper': 34, 'lower': 34, 'sig/mech': 71}); reduced nnz 2058 (0.5% dense); dense-LU cost ratio (n/m)^3 = 1.8x
+  elimination [unit-diag, <=2 off-diag, zero fill]: n 751 -> 612  (eliminated {'upper': 34, 'lower': 34, 'sig/mech': 71}); reduced nnz 2058 (0.5% dense); dense-LU cost ratio (n/m)^3 = 1.8x
+  elimination [unit-diag, <=4 off-diag, fill <= 4]: n 751 -> 264  (eliminated {'upper': 178, 'lower': 178, 'sig/mech': 131}); reduced nnz 1092 (1.6% dense); dense-LU cost ratio (n/m)^3 = 23.0x
+  [zero fill] f-index 0: n_reduced=612 cond(D)=2.6e+00 rel err signal x=1.3e-08  adjoint w=4.0e-14
+  [zero fill] f-index 50: n_reduced=612 cond(D)=2.6e+00 rel err signal x=2.4e-08  adjoint w=9.5e-14
+  [zero fill] f-index 100: n_reduced=612 cond(D)=2.6e+00 rel err signal x=1.2e-09  adjoint w=8.0e-14
+  [fill<=4] f-index 0: n_reduced=264 cond(D)=6.2e+12 rel err signal x=1.3e-08  adjoint w=3.3e-14
+  [fill<=4] f-index 50: n_reduced=264 cond(D)=6.2e+12 rel err signal x=2.4e-08  adjoint w=4.9e-14
+  [fill<=4] f-index 100: n_reduced=264 cond(D)=6.2e+12 rel err signal x=1.2e-09  adjoint w=2.2e-14

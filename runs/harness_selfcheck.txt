@@ -1,0 +1,21 @@
+[ok   ] uifo3_scored         32.5s (ref   31.6s)  carrier=0.0e+00 signal=0.0e+00 powers=0.0e+00 noise=0.0e+00 sensitivity=0.0e+00 loss=0.0e+00 gradient=0.0e+00
+         ill-conditioned (loose gate): powers, noise
+[ok   ] uifo3_jitter         25.0s (ref   23.3s)  carrier=0.0e+00 signal=0.0e+00 powers=0.0e+00 noise=0.0e+00 sensitivity=0.0e+00 loss=0.0e+00 gradient=0.0e+00
+         ill-conditioned (loose gate): powers
+[ok   ] uifo3_finesse        20.5s (ref   20.0s)  carrier=0.0e+00 signal=0.0e+00 powers=0.0e+00 noise=0.0e+00 sensitivity=0.0e+00 loss=0.0e+00 gradient=0.0e+00
+         ill-conditioned (loose gate): powers, sensitivity, loss
+[ok   ] uifo3_20_5000        21.5s (ref   20.9s)  carrier=0.0e+00 signal=0.0e+00 powers=0.0e+00 noise=0.0e+00 sensitivity=0.0e+00 loss=0.0e+00 gradient=0.0e+00
+         ill-conditioned (loose gate): signal, powers, noise, sensitivity, gradient
+[ok   ] uifo2_rand_space     17.4s (ref   16.8s)  carrier=0.0e+00 signal=0.0e+00 powers=0.0e+00 noise=0.0e+00 sensitivity=0.0e+00 loss=0.0e+00 gradient=0.0e+00
+[ok   ] uifo2_rand_am        16.6s (ref   16.0s)  carrier=0.0e+00 signal=0.0e+00 powers=0.0e+00 noise=0.0e+00 sensitivity=0.0e+00 loss=0.0e+00 gradient=0.0e+00
+[ok   ] uifo2_rand_fm        16.2s (ref   16.0s)  carrier=0.0e+00 signal=0.0e+00 powers=0.0e+00 noise=0.0e+00 sensitivity=0.0e+00 loss=0.0e+00 gradient=0.0e+00
+[ok   ] aligo_space          16.6s (ref   16.2s)  carrier=0.0e+00 signal=0.0e+00 powers=0.0e+00 noise=0.0e+00 sensitivity=0.0e+00 loss=0.0e+00 gradient=0.0e+00
+[ok   ] aligo_am             16.5s (ref   16.4s)  carrier=0.0e+00 signal=0.0e+00 powers=0.0e+00 noise=0.0e+00 sensitivity=0.0e+00 loss=0.0e+00 gradient=0.0e+00
+[ok   ] aligo_fm             16.5s (ref   16.1s)  carrier=0.0e+00 signal=0.0e+00 powers=0.0e+00 noise=0.0e+00 sensitivity=0.0e+00 loss=0.0e+00 gradient=0.0e+00
+[ok   ] voyager_space        16.9s (ref   16.5s)  carrier=0.0e+00 signal=0.0e+00 powers=0.0e+00 noise=0.0e+00 sensitivity=0.0e+00 loss=0.0e+00 gradient=0.0e+00
+         ill-conditioned (loose gate): gradient
+[ok   ] voyager_fm           17.4s (ref   16.8s)  carrier=0.0e+00 signal=0.0e+00 powers=0.0e+00 noise=0.0e+00 sensitivity=0.0e+00 loss=0.0e+00 gradient=0.0e+00
+         ill-conditioned (loose gate): sensitivity, loss, gradient
+[ok   ] cavity_tuning        17.9s (ref   17.3s)  carrier=0.0e+00 signal=0.0e+00 powers=0.0e+00 noise=0.0e+00 sensitivity=0.0e+00 loss=0.0e+00 gradient=0.0e+00
+
+ALL PASS

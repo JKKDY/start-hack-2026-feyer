@@ -10,3 +10,16 @@ benchmark*.pdf
 benchmark*.svg
 *.npz
 examples/results/
+
+# profiling / harness artefacts (large or machine-specific)
+dump/
+**/dump/
+*.hlo
+*.hlo.txt
+*.pb
+*.pbtxt
+*.mlir
+xla_dump*/
+tests/.tmp/
+tests/reference/
+runs/*.log

@@ -1,0 +1,71 @@
+=== index / data arrays passed to simulate (all become jit ARGUMENTS in benchmark.py) ===
+  optimized_parameters                     float64    (193,)          
+  optimized_parameter_indices              int64      (201,)          
+  optimized_value_indices                  int64      (201,)          
+  carrier_changing_parameter_indices       int64      (1,)            
+  carrier_changing_values                  complex128 (1, 1)          
+  signal_changing_parameter_indices        int64      (1,)            
+  signal_changing_values                   float64    (1, 101)        
+  parameters                               complex128 (1, 532)        
+  carrier_matrix                           complex128 (286, 287)      
+  signal_matrix                            complex128 (751, 752)      
+  noise_matrix                             complex128 (751, 751)      
+  noise_selection_vectors                  complex128 (1, 1, 751)     
+  qhd_parameter_indices                    int64      (0,)            
+  qhd_placing_indices                      int64      (0,)            
+  linked_indices                           int64      (1,)            
+  linking_function_indices                 int64      (1,)            
+  indices_to_link                          int64      (1,)            
+  carrier_function_input_indices           int64      (77, 7)         
+  carrier_function_indices                 int64      (77,)           
+  carrier_output_indices                   int64      (2, 279)        
+  carrier_matrix_indices                   int64      (2, 279)        
+  signal_function_input_indices            int64      (679, 7)        
+  signal_function_indices                  int64      (679,)          
+  signal_output_indices                    int64      (2, 1893)       
+  signal_matrix_indices                    int64      (2, 1893)       
+  signal_carrier_indices                   int64      (1004,)         
+  signal_carrier_placing_indices           int64      (2, 1004)       
+  noise_function_input_indices             int64      (66, 7)         
+  noise_function_indices                   int64      (66,)           
+  noise_output_indices                     int64      (2, 272)        
+  noise_system_matrix_indices              int64      (2, 272)        
+  total 19.6 MB
+
+=== H1: function usage per matrix (entries evaluated via vmap(lax.switch)) ===
+  carrier: 77 function evaluations, 3 distinct of 19 functions:
+     laserx7, surfacex54, spacex16
+     input block shape (77, 7), outputs written 279
+  signal: 679 function evaluations, 11 distinct of 19 functions:
+     force_calculation_rightx54, surfacex54, spacex71, space_modulationx71, signal_functionx71, space_lowerx71, susceptibilityx54, force_calculation_leftx54, corrected_optomechanical_phase_leftx54, corrected_optomechanical_phase_rightx54, space_modulation_lowerx71
+     input block shape (679, 7), outputs written 1893
+  noise: 66 function evaluations, 3 distinct of 19 functions:
+     vacuum_quantum_noisex8, loss_quantum_noisex54, squeezerx4
+     input block shape (66, 7), outputs written 272
+
+=== H4: sparsity ===
+  carrier: n=286  numeric nnz=680 (0.83%)  structural nnz=680 (0.83%)  batch=1
+  signal: n=751  numeric nnz=2553 (0.45%)  structural nnz=2597 (0.46%)  batch=101
+  noise: n=751  numeric nnz=272 (0.05%)  structural nnz=272 (0.05%)  batch=101
+
+=== signal matrix rows by block ===
+  upper sideband  rows 0-285: unit diag 286/286; off-diag count histogram {0: 12, 1: 12, 2: 142, 3: 120}
+  lower sideband  rows 286-571: unit diag 286/286; off-diag count histogram {0: 12, 1: 12, 2: 142, 3: 120}
+  signal+mech     rows 572-750: unit diag 179/179; off-diag count histogram {0: 71, 1: 54, 8: 48, 16: 6}
+  rows with nonzero RHS: 71
+  max column degree 8, max row degree 16
+
+  elimination [unit-diag, <=1 off-diag, zero fill (space-type rows)]: n 751 -> 612  (eliminated {'upper': 34, 'lower': 34, 'sig/mech': 71}); reduced nnz 2058 (0.5% dense); dense-LU cost ratio (n/m)^3 = 1.8x
+
+  elimination [unit-diag, <=2 off-diag, zero fill]: n 751 -> 612  (eliminated {'upper': 34, 'lower': 34, 'sig/mech': 71}); reduced nnz 2058 (0.5% dense); dense-LU cost ratio (n/m)^3 = 1.8x
+
+  elimination [unit-diag, <=4 off-diag, fill <= 4]: n 751 -> 264  (eliminated {'upper': 178, 'lower': 178, 'sig/mech': 131}); reduced nnz 1092 (1.6% dense); dense-LU cost ratio (n/m)^3 = 23.0x
+
+  carrier elimination [<=1 off-diag, zero fill]: 286 -> 240
+
+=== conditioning (signal matrix, a few frequencies) ===
+  f=  800.0 Hz  cond_2 = 2.02e+22   after row/col equilibration = 8.41e+12
+  f= 1549.2 Hz  cond_2 = 1.02e+22   after row/col equilibration = 4.25e+12
+  f= 3000.0 Hz  cond_2 = 5.23e+21   after row/col equilibration = 2.17e+12
+  |entries| range 2.0e-10 .. 5.9e+09
+  carrier cond_2 = 3.69e+05

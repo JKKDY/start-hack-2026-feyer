@@ -28,7 +28,7 @@ from jax import lax, vmap, jit
 from differometor.setups import Setup
 from differometor.build import build, pairs_to_arrays, prepare_arrays, LINKING_FUNCTIONS
 from differometor.components import FUNCTIONS, UNIT_VACUUM, H_PLANCK, F0
-from differometor.sparse_signal import build_signal_pattern, pack_noise_template, pack_signal_template, solve_signal_and_adjoint
+from differometor.sparse_signal import built_signal_pattern, pack_noise_template, pack_signal_template, solve_signal_and_adjoint
 from differometor.static import StaticArray, make_static, unwrap_static
 
 
@@ -99,6 +99,33 @@ class _Columns:
         return self.inputs.shape[1]
 
 
+def _group_coefficients(function, group, parameters, constants):
+    inputs, rows, columns = group
+    if constants is None or not isinstance(inputs, np.ndarray):
+        return vmap(function)(parameters[inputs])[rows, columns]
+    values = function(_Columns(parameters, inputs, constants))
+    return values[columns] if values.ndim == 1 else values[columns, rows]
+
+
+def _sweep_coefficients(parameters, inputs, order, groups, constants, varying):
+    """Evaluate groups independent of both sweeps once per simulation call."""
+    if not isinstance(groups, tuple) or varying is None:
+        evaluate = partial(component_coefficients, constants=constants)
+        return vmap(evaluate, in_axes=(0, None, None, None))(parameters, inputs, order, groups)
+    pieces = []
+    for function, group in zip(FUNCTIONS, groups, strict=True):
+        if group is None:
+            continue
+        evaluate = partial(_group_coefficients, function, group, constants=constants)
+        if not isinstance(group[0], np.ndarray) or np.isin(group[0], varying).any():
+            pieces.append(vmap(evaluate)(parameters))
+        else:
+            values = evaluate(parameters[0])
+            pieces.append(jnp.broadcast_to(values, (parameters.shape[0], values.size)))
+    combined = jnp.concatenate(pieces, axis=1)
+    return combined if order is None else combined[:, order]
+
+
 def component_coefficients(parameters, function_input_indices, output_indices, function_indices, constants=None):
     """Evaluate and select the coefficients written by the component instructions."""
     if isinstance(function_indices, tuple):
@@ -106,17 +133,9 @@ def component_coefficients(parameters, function_input_indices, output_indices, f
         for function, group in zip(FUNCTIONS, function_indices, strict=True):
             if group is None:
                 continue
-            inputs, rows, columns = group
-            if constants is not None and isinstance(inputs, np.ndarray):
-                values = function(_Columns(parameters, inputs, constants))
-                if values.ndim == 1:
-                    coefficients.append(values[columns])
-                else:
-                    coefficients.append(values[columns, rows])
-            else:
-                values = vmap(function)(parameters[inputs])
-                coefficients.append(values[rows, columns])
-        return jnp.concatenate(coefficients)[output_indices]
+            coefficients.append(_group_coefficients(function, group, parameters, constants))
+        combined = jnp.concatenate(coefficients)
+        return combined if output_indices is None else combined[output_indices]
 
     function_inputs = parameters[function_input_indices]
     output_matrix = vmap(lambda i, x: lax.switch(i, FUNCTIONS, x))(function_indices, function_inputs)
@@ -381,7 +400,9 @@ def simulate(
         constants = ConstantParameters(parameters, dynamic)
     parameters = jnp.asarray(parameters)
     update = partial(_update, constants=constants)
-    coefficients_of = partial(component_coefficients, constants=constants)
+    varying = None
+    if isinstance(carrier_changing_parameter_indices, np.ndarray) and isinstance(signal_changing_parameter_indices, np.ndarray):
+        varying = np.union1d(carrier_changing_parameter_indices, signal_changing_parameter_indices)
 
     # Insert optimized parameter values into the base parameter row.
     parameters = parameters.at[[0], optimized_parameter_indices].set(
@@ -435,8 +456,8 @@ def simulate(
         signal_matrix = signal_matrix.at[lower_coupling].set(signal_matrix[lower_coupling].conj())
         signal_rhs = signal_matrix[:, :, -1]
     else:
-        updates = vmap(coefficients_of, in_axes=(0, None, None, None))(
-            parameters, signal_function_input_indices, signal_output_indices, signal_function_indices,
+        updates = _sweep_coefficients(
+            parameters, signal_function_input_indices, signal_output_indices, signal_function_indices, constants, varying,
         )
         coefficients = jnp.broadcast_to(packed_signal.template, (parameters.shape[0], packed_signal.template.size))
         coefficients = coefficients.at[:, packed_signal.update_slots].set(updates)
@@ -502,11 +523,14 @@ def simulate(
         noise_sources = jnp.einsum("bij,dbj->dbi", noise_matrix, noise_weights)
         variance_terms = noise_weights.conj() * noise_sources
     else:
-        updates = vmap(coefficients_of, in_axes=(0, None, None, None))(
-            parameters, noise_function_input_indices, noise_output_indices, noise_function_indices,
+        updates = _sweep_coefficients(
+            parameters, noise_function_input_indices, noise_output_indices, noise_function_indices, constants, varying,
         )
-        values = jnp.broadcast_to(packed_noise.template, (updates.shape[0], packed_noise.template.size))
-        values = values.at[:, packed_noise.update_slots].set(updates)
+        if packed_noise.update_slots is None:
+            values = updates.astype(packed_noise.template.dtype)
+        else:
+            values = jnp.broadcast_to(packed_noise.template, (updates.shape[0], packed_noise.template.size))
+            values = values.at[:, packed_noise.update_slots].set(updates)
         variance_terms = noise_weights[..., packed_noise.rows].conj() * (
             values * noise_weights[..., packed_noise.columns]
         )
@@ -631,14 +655,32 @@ def run_build_step(
     simulation_arrays = {arg_names[i]: array for i, array in enumerate(all_arrays)}
     if signal_solver != "dense":
         template, updates, coupling = matrices[2], signal_arrays[3], signal_arrays[5]
-        pattern = build_signal_pattern(template, updates, coupling)
+        pattern = built_signal_pattern(matrices[1], template.shape[0], updates, coupling)
         simulation_arrays["signal_sparsity"] = pattern
         if signal_solver == "packed":
             simulation_arrays["packed_signal"] = pack_signal_template(
                 template, pattern, updates, coupling, matrices[1].shape[0],
             )
     if pack_noise:
-        simulation_arrays["packed_noise"] = pack_noise_template(matrices[3], noise_arrays[3])
+        simulation_arrays["packed_noise"] = pack_noise_template(matrices[3], noise_arrays[3], zero_template=True)
+
+    # Keep the original write order for repeated destinations. Unique writes can
+    # go directly from function-group order to their packed matrix slots.
+    if signal_solver == "packed":
+        packed = simulation_arrays["packed_signal"]
+        if np.unique(packed.update_slots).size == packed.update_slots.size:
+            grouped = np.argsort(simulation_arrays["signal_output_indices"])
+            simulation_arrays["packed_signal"] = packed._replace(update_slots=packed.update_slots[grouped])
+            simulation_arrays["signal_matrix_indices"] = np.asarray(signal_arrays[3])[:, grouped]
+            simulation_arrays["signal_output_indices"] = None
+    if pack_noise:
+        packed = simulation_arrays["packed_noise"]
+        if np.unique(packed.update_slots).size == packed.update_slots.size == packed.template.size:
+            # Arrange outputs in canonical noise-slot order before the reduction.
+            ordered = np.argsort(packed.update_slots)
+            simulation_arrays["noise_output_indices"] = noise_arrays[2][ordered]
+            simulation_arrays["noise_system_matrix_indices"] = np.asarray(noise_arrays[3])[:, ordered]
+            simulation_arrays["packed_noise"] = packed._replace(update_slots=None)
 
     # Integer/bool index arrays become compile-time constants (see differometor/static.py).
     # The build works in NumPy; remaining float/complex data is handed to JAX here with a plain

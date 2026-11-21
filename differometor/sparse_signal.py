@@ -19,15 +19,15 @@ class PackedSignal(NamedTuple):
 
 class PackedNoise(NamedTuple):
     template: jax.Array
-    update_slots: jax.Array
+    update_slots: jax.Array | None
     rows: jax.Array
     columns: jax.Array
 
 
-def pack_noise_template(template, update_indices):
+def pack_noise_template(template, update_indices, *, zero_template=False):
     """Give repeated covariance writes the same destination slot."""
     matrix = np.asarray(template)
-    initial = np.asarray(np.nonzero(matrix))
+    initial = np.empty((2, 0), dtype=int) if zero_template else np.asarray(np.nonzero(matrix))
     updates = np.asarray(update_indices)
     coordinates, inverse = np.unique(np.concatenate((initial, updates), axis=1).T, axis=0, return_inverse=True)
     rows, columns = coordinates.T
@@ -50,16 +50,38 @@ def build_signal_pattern(template, update_indices, coupling_indices):
     return tuple(np.asarray(array, dtype=np.int32) for array in (rows, columns, pointers))
 
 
+def built_signal_pattern(carrier, size, updates, couplings):
+    """CSC pattern of the two carrier blocks, auxiliary identity, and possible writes."""
+    width = carrier.shape[0]
+    rows, cols = np.nonzero(carrier[:, :width])
+    keys = [cols * size + rows, (cols + width) * size + rows + width,
+            np.arange(2 * width, size) * (size + 1)]
+    for rows_to_write, columns_to_write in (updates, couplings):
+        write_rows = np.asarray(rows_to_write, dtype=np.intp) % size
+        write_columns = np.asarray(columns_to_write, dtype=np.intp) % (size + 1)
+        in_matrix = write_columns < size
+        keys.append(write_columns[in_matrix] * size + write_rows[in_matrix])
+    cols, rows = np.divmod(np.unique(np.concatenate(keys)), size)
+    pointers = np.concatenate(([0], np.cumsum(np.bincount(cols, minlength=size))))
+    return tuple(value.astype(np.int32) for value in (rows, cols, pointers))
+
+
 def pack_signal_template(template, pattern, update_indices, coupling_indices, carrier_size):
     """Map matrix writes to coefficient slots, with the right-hand side at the end."""
     dense = np.asarray(template)
     size = len(dense)
     rows, columns = map(np.asarray, pattern[:2])
-    slots = np.full(dense.shape, -1, dtype=np.int32)
-    slots[rows, columns] = np.arange(len(rows))
-    slots[:, -1] = np.arange(len(rows), len(rows) + size)
-    update_slots = slots[tuple(np.asarray(update_indices))]
-    coupling_slots = slots[tuple(np.asarray(coupling_indices))]
+    keys = columns.astype(np.int64) * size + rows
+
+    def slots(indices):
+        write_rows, write_columns = np.asarray(indices, dtype=np.intp)
+        write_rows = write_rows % size
+        write_columns = write_columns % (size + 1)
+        matrix_slots = np.searchsorted(keys, write_columns * size + write_rows)
+        return np.where(write_columns == size, len(rows) + write_rows, matrix_slots).astype(np.int32)
+
+    update_slots = slots(update_indices)
+    coupling_slots = slots(coupling_indices)
     packed = np.concatenate((dense[rows, columns], dense[:, -1]))
 
     slot_rows = np.concatenate((rows, np.arange(size)))

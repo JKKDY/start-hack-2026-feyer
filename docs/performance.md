@@ -2,6 +2,51 @@
 
 The current build is `baseline-optimized`. It combines the packed sparse solver, static index arrays, a NumPy build step, fixed setup parameters folded into the compiled program, and LLVM `-O0` compilation set inside `differometor/` (see [XLA backend optimization level](#xla-backend-optimization-level)). The original `benchmark.py` passes on it. On the laptop described below, the first run including JIT fell from **63.13 s to about 12 s**, and the warm median from **33.278 s to about 0.31 s**. The [correctness harness](correctness-harness.md) passes all 13 setups at nominal and fuzzed parameters. The strict elementwise comparison of raw signal fields still reports differences in the sparse modes; see [Signal-field stability](#signal-field-stability). Profiling that guided these steps is in [Profiling findings](profiling.md).
 
+## How the optimization decisions evolved
+
+1. The dense reference spent most of its time evaluating the optical system. We rewrote noise as a quadratic form to eliminate a redundant solve, then grouped instructions by component type so JAX could trace only the relevant functions. On the historical pinned i7, the first run went from 63.13 to 55.06 to 44.36 seconds.
+2. Compact covariance and shared *dense* LU each helped some measurements, but their cold-run gains were inconsistent. The sparse LU implementation shared one factorization per frequency between the signal and adjoint solves. Packing only occupied signal and noise entries then reduced memory traffic. Across the i7 experiments the fully packed version reached 16.80 seconds cold and 0.227 seconds warm.
+3. The sparse solver needed more accuracy for small detector weights, particularly on Voyager. Two iterative corrections using the existing factors recovered accuracy. We retained the corrections despite their cost. Moving setup calculations to NumPy avoided small JAX compilations. Supplying structural indices and fixed parameter values at trace time simplified the differentiated program. The fixed-parameter build recorded 12.09 seconds on the i7.
+4. Once the solves were cheap, compiler work dominated. Lower LLVM optimization, batching component columns, removing empty indexed updates, and avoiding setup copies reduced cold time. Changing the CPU fusion emitter helped further. The M1 comparison for commit `76ce14b` was 1.990 to 1.549 seconds cold, with warm evaluation rising from 0.171 to 0.180 seconds. This was a separate machine and baseline.
+5. A small output-selection shortcut and a later prototype that evaluated entire fixed groups with NumPy did not establish a reproducible end-to-end win in the active checkout. Neither became the baseline for the experiments below.
+
+## Sweep reuse, coefficient placement and packed index construction
+
+We tested three changes against `76ce14b` with the original benchmark and its compilation cache disabled. Each process evaluated the full workload once cold and ten more times warm. Rows below are medians across fresh processes in varied order. The M1 macOS runs were unpinned (8 logical CPUs, 16 GiB, Python 3.12.16). The Linux ARM64 runs used Docker Desktop on the same M1 and one logical CPU selected with `--cpus 1`. Both used JAX and jaxlib 0.9.0.
+
+**macOS**
+
+| Variant | Fresh runs | First run (s) | Trace/lower/compile (s) | Optical build (s) | Warm (s) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Control, 76ce14b | 5 | 1.594 | 1.015 | 0.046 | 0.178 |
+| Sweep reuse | 3 | 1.559 | 0.986 | 0.046 | 0.177 |
+| Direct placement | 3 | 1.530 | 0.954 | 0.047 | 0.175 |
+| Packed index construction | 3 | 1.591 | 1.014 | 0.042 | 0.178 |
+| Placement + index construction | 3 | 1.593 | 0.974 | 0.042 | 0.173 |
+| All three | 3 | 1.548 | 0.955 | 0.043 | 0.174 |
+| Fully packed construction, dense fields omitted | 3 | 1.564 | 1.006 | 0.038 | 0.175 |
+
+**Linux ARM64**
+
+| Variant | Fresh runs | First run (s) | Trace/lower/compile (s) | Optical build (s) | Warm (s) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Control, 76ce14b | 3 | 2.081 | 1.344 | 0.051 | 0.294 |
+| Sweep reuse | 3 | 2.075 | 1.385 | 0.053 | 0.292 |
+| Direct placement | 3 | 1.970 | 1.337 | 0.051 | 0.289 |
+| Packed index construction | 3 | 1.998 | 1.367 | 0.045 | 0.295 |
+| Placement + index construction | 3 | 1.981 | 1.350 | 0.046 | 0.290 |
+| All three | 3 | 1.929 | 1.308 | 0.046 | 0.291 |
+
+- **Sweep reuse.** During tracing, the simulator checks which group inputs intersect either sweep. Independent groups run once per evaluation and their coefficients broadcast across the sweep. Optimized variables still participate in automatic differentiation. This change alone was nearly flat on Linux.
+- **Direct placement.** For unique writes, setup composes the group permutation with the signal destination mapping. When every noise slot is written exactly once, the coefficients arrive directly in canonical noise order. Repeated and partial writes retain their previous semantics. Direct placement delivered the shortest individual macOS median.
+- **Packed index construction.** Setup derives the CSC structure from the two carrier blocks, auxiliary diagonal and possible writes. It computes packed destinations by sorted-key lookup and avoids scanning an initially empty noise template. All 13 setups reproduced the previous CSC structure and destination indices exactly. The production version retains the dense matrix fields used by existing callers.
+- **Fully packed builder trial.** Omitting the dense compatibility fields reduced the M1 build median to 0.038 s, but changes what callers receive from the builder. We dropped this variant.
+- **Decision.** We kept the three compatible changes together. The pinned Linux median went from 2.081 to 1.929 s. Placement plus index construction alone took 1.981 s. Three samples per Linux variant establish a candidate worth keeping, with run-to-run variation large enough that the exact gain on the judging Xeon remains open.
+
+The live checkout passed all 13 generality cases. The worst sensitivity and gradient errors excluding Voyager FM were 1.34e-07 and 5.02e-08. Voyager FM reached 0.0667 and 0.00146, within its established round-off tolerances. The sparse solver unit test passed.
+
+Every isolated prototype and both compatible combinations passed all 13 generality cases. The exact live code also passed the pinned Linux benchmark twice (2.148 and 2.007 s). A separate adjacent control run took 2.075 s. Across the adjacent pair, carrier, signal, noise, sensitivity and powers matched exactly. The largest absolute difference over all 193 gradient components was 1.04e-25. Warm medians in this pair were 0.298 s for the control and 0.309 s for the final version.
+
 ## Accepted optimization history
 
 The table tracks cumulative builds on one pinned logical CPU of an Intel Core i7-11370H laptop (8 logical CPUs, 16 GB RAM), with native Windows 10, Python 3.12.10, JAX and JAXLIB 0.9.0, and double precision. Every run used the saved 3×3 UIFO, 101 frequencies, and 193 design variables. Timings are one complete first run and the median of three warm evaluations. The first-run total includes JIT tracing, lowering, and compilation.

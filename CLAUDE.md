@@ -20,7 +20,7 @@ Make one complete evaluation of the public Differometor simulator (Python + JAX,
 - Carrier, signal, noise, sensitivity, powers, loss, gradient all finite; gradient not identically zero.
 - Finite-difference check on `mb11.tuning` (steps 1e-3 and 5e-4, rtol 1%) must pass.
 - No precomputed answers, no omitted calculations. Fixture JSON files must stay byte-identical (SHA-checked).
-- Only edit `differometor/`. Never modify `benchmark.py`; `AGENTS.md` has the rule and how to make variants.
+- Keep `benchmark.py` unchanged for comparisons. The team relayed that the organisers allow implementation and build or packaging changes that preserve the evaluated inputs and outputs. Rank changes by the complete cold-start time.
 
 ### ⚠️ Generality requirement (from the challenge provider)
 > "The goal is a simulator speedup that works beyond a specific setup. So the final evaluation will use a similar optical setup like the one included in the GitHub repo, but with slightly different parameters and components. Your simulator submissions should still work with that slight setup variation."

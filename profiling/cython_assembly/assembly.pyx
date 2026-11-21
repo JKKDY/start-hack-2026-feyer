@@ -83,3 +83,81 @@ def backward(const int64_t[::1] last_write, const int64_t[::1] last_coupling,
                     dt[p] += gr
                     dt[p+1] += gi
     return template_bar, updates_bar, carrier_bar
+
+
+def noise_forward(const double[::1] template, const int64_t[::1] writes,
+                  const int64_t[::1] rows, const int64_t[::1] columns,
+                  const double[:, ::1] updates, const double[:, :, ::1] weights):
+    """Evaluate real(w^H Q w) using only stored covariance coefficients."""
+    cdef Py_ssize_t f, d, j, p, r, c
+    cdef Py_ssize_t frequencies = updates.shape[0], slots = rows.shape[0]
+    cdef double ar, ai, br, bi, total
+    coefficients = np.empty((frequencies, slots), dtype=np.complex128)
+    variance = np.empty((weights.shape[0], frequencies), dtype=np.float64)
+    cdef double[:, ::1] values = coefficients.view(np.float64)
+    cdef double[:, ::1] result = variance
+    with nogil:
+        for f in range(frequencies):
+            for p in range(2 * slots):
+                values[f, p] = template[p]
+            for j in range(writes.shape[0]):
+                p = 2 * writes[j]
+                values[f, p] = updates[f, 2*j]
+                values[f, p+1] = updates[f, 2*j+1]
+            for d in range(weights.shape[0]):
+                total = 0
+                for j in range(slots):
+                    r = 2 * rows[j]
+                    c = 2 * columns[j]
+                    ar = values[f, 2*j]
+                    ai = values[f, 2*j+1]
+                    br = weights[d, f, c]
+                    bi = weights[d, f, c+1]
+                    total += weights[d, f, r] * (ar*br - ai*bi) + weights[d, f, r+1] * (ar*bi + ai*br)
+                result[d, f] = total
+    return variance, coefficients
+
+
+def noise_backward(const int64_t[::1] last_write, const int64_t[::1] rows,
+                   const int64_t[::1] columns, const double[:, ::1] values,
+                   const double[:, :, ::1] weights, const double[:, ::1] cotangent,
+                   Py_ssize_t update_count):
+    cdef Py_ssize_t f, d, j, r, c, writer
+    cdef Py_ssize_t slots = rows.shape[0]
+    cdef double g, ar, ai, br, bi, qr, qi, vr, vi
+    template_bar = np.zeros(slots, dtype=np.complex128)
+    updates_bar = np.zeros((values.shape[0], update_count), dtype=np.complex128)
+    weights_bar = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2]//2), dtype=np.complex128)
+    cdef double[::1] dt = template_bar.view(np.float64)
+    cdef double[:, ::1] du = updates_bar.view(np.float64)
+    cdef double[:, :, ::1] dw = weights_bar.view(np.float64)
+    with nogil:
+        for f in range(values.shape[0]):
+            for j in range(slots):
+                r = 2 * rows[j]
+                c = 2 * columns[j]
+                qr = values[f, 2*j]
+                qi = values[f, 2*j+1]
+                vr = 0
+                vi = 0
+                for d in range(weights.shape[0]):
+                    g = cotangent[d, f]
+                    ar = weights[d, f, r]
+                    ai = weights[d, f, r+1]
+                    br = weights[d, f, c]
+                    bi = weights[d, f, c+1]
+                    # JAX's complex VJP uses the algebraic transpose.
+                    vr += g * (ar*br + ai*bi)
+                    vi += g * (ar*bi - ai*br)
+                    dw[d, f, r] += g * (qr*br - qi*bi)
+                    dw[d, f, r+1] -= g * (qr*bi + qi*br)
+                    dw[d, f, c] += g * (ar*qr + ai*qi)
+                    dw[d, f, c+1] += g * (ar*qi - ai*qr)
+                writer = last_write[j]
+                if writer >= 0:
+                    du[f, 2*writer] = vr
+                    du[f, 2*writer+1] = vi
+                else:
+                    dt[2*j] += vr
+                    dt[2*j+1] += vi
+    return template_bar, updates_bar, weights_bar

@@ -32,6 +32,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", type=Path, help="New directory for the candidate snapshot")
     parser.add_argument("--ref", default="HEAD", help="Source revision to stage before applying the spike")
+    parser.add_argument("--pack-noise", action="store_true", help="Also move the packed covariance contraction into Cython")
     args = parser.parse_args()
     destination = args.destination.resolve()
     revision = git("rev-parse", "--verify", f"{args.ref}^{{commit}}").decode().strip()
@@ -53,6 +54,15 @@ def main():
     if code.count(anchor) != 1:
         raise ValueError("The selected simulator does not match the spike's assembly boundary")
     code = code.replace(anchor, anchor + "\nfrom differometor._aot_assembly_spike import assemble as _cython_assemble")
+    if args.pack_noise:
+        start = code.index("        values = jnp.broadcast_to(packed_noise.template,")
+        end = code.index("    noise = jnp.sqrt", start)
+        code = code[:start] + "        noise_variance = _cython_noise(packed_noise, updates, noise_weights)\n" + code[end:]
+        dense = "        variance_terms = noise_weights.conj() * noise_sources"
+        code = code.replace(dense, "        noise_variance = jnp.real(jnp.sum(noise_weights.conj() * noise_sources, axis=-1))")
+        code = code.replace(
+            anchor, anchor + "\nfrom differometor._aot_assembly_spike import noise_variance as _cython_noise",
+        )
     simulator.write_text(code, encoding="utf-8")
     shutil.copyfile(HERE / "assembly.pyx", package / "_aot_assembly_kernel.pyx")
     shutil.copyfile(HERE / "bridge.py", package / "_aot_assembly_spike.py")

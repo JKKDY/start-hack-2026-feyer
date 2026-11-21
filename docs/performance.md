@@ -135,6 +135,27 @@ All scored runs passed. The candidate's maximum scored log-sensitivity error was
 
 Keep this as an isolated experiment. It removes compilation for one part of the graph while leaving about 7.4 s of JIT. The bridge implements reverse-mode differentiation and would need a forward-mode rule before serving as a general replacement. To reproduce it, install Cython, setuptools and a C compiler in the benchmark environment, then prepare an unused directory with `python profiling/cython_assembly/prepare.py <new-directory> --ref 01a5d4b`. Run the original benchmark and correctness harness from that directory. [Reproduction helper](../profiling/cython_assembly/prepare.py)
 
+#### Packed covariance in Cython
+
+The follow-up candidate moved the packed covariance scatter and detector noise contraction, including their reverse pass, into the same extension. It retains the assembly spike and leaves the benchmark original. The two fresh pairs below were measured on the same machine and pinned CPU as the assembly spike. Each warm number is the median of three evaluations.
+
+| Pair | Cython block | First incl. JIT (s) | JIT (s) | Warm (s) |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Assembly | 8.62 | 7.34 | 0.285 |
+| 1 | Assembly and covariance | 8.16 | 6.97 | 0.287 |
+| 2 | Assembly | 8.87 | 7.61 | 0.279 |
+| 2 | Assembly and covariance | 8.82 | 7.49 | 0.304 |
+
+The covariance variant passed every scored run and all 13 correctness cases. The scored log-sensitivity error was 5.37×10⁻⁶. The largest suite sensitivity and gradient errors remained 6.75×10⁻² and 1.22×10⁻³ in the known near-null `voyager_fm` case, within its reference tolerances. The cold improvement was small, and warm runtime increased in both pairs, so the covariance path remains optional in the spike. Add `--pack-noise` when running the reproduction helper to enable it in the staged checkout.
+
+#### JAX AOT component tiles
+
+A separate application experiment compiled the 19 registered component functions and their reverse-mode pullbacks as a bundle of 38 executables. Each takes a fixed tile of 128 input rows. Python splits runtime-sized batches into as many tiles as needed and pads only the final tile. Matrix dimensions, component counts, and geometry are absent from the executable signatures.
+
+On the same pinned Windows CPU and JAX/JAXLIB 0.9.0 runtime, building the bundle took 6.79 s offline. A fresh process loaded it in 0.73 s, including CPU initialization. It evaluated 7,675 component input rows and 84,425 value and pullback entries from the cavity, scored UIFO, and alternate UIFO builder plans. Values and pullbacks agreed exactly with ordinary JAX references, with no JIT events reported during reload and execution. This is a reusable component library test. The full simulation and geometry assembly have yet to run through this library together.
+
+Run `python profiling/aot_component_tiles.py build <new-directory>`, then `python profiling/aot_component_tiles.py check <same-directory>` in a fresh process with `JAX_LOG_COMPILES=1`. Use a locally produced bundle on the same host and runtime. The scored benchmark never loads the bundle. [AOT probe](../profiling/aot_component_tiles.py)
+
 The original scored harness has an explicit lower-and-compile step for each of its three stages and disables the persistent cache. A separate AOT runner would measure application startup under different conditions. Confirm with the organisers before counting offline compilation toward a scored speedup. For an unchanged-harness speedup, move a substantial part of the graph into a native operation that the existing JAX stages can call, or reduce the graph that XLA compiles.
 
 ## Benchmarking further changes

@@ -142,13 +142,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("benchmark.json"), help="JSON report (.json)")
     parser.add_argument("--plot", type=Path, help="Timing plot (.png, .svg or .pdf); defaults to the JSON filename with .png suffix")
     parser.add_argument("--save-arrays", type=Path, help="Save physical outputs, sensitivity, powers, parameters and gradient (.npz)")
-    parser.add_argument("--signal-solver", choices=("dense", "sparse", "packed"), default="packed",
-                        help="Select a CPU signal solver (default: packed)")
-    parser.add_argument("--pack-noise", action=argparse.BooleanOptionalAction, default=None,
-                        help="Evaluate noise at occupied covariance entries (default: on with packed signal)")
     args = parser.parse_args()
-    if args.pack_noise is None:
-        args.pack_noise = args.signal_solver == "packed"
     if args.repeats < 3:
         parser.error("Use at least three timed repetitions.")
     plot_path = output_paths(args, parser)
@@ -207,10 +201,7 @@ def main():
         parameters = jnp.asarray(initial, dtype=jnp.float64)
         frequencies = jnp.asarray(reference["frequencies"], dtype=jnp.float64)
         expected = jnp.asarray(reference["sensitivities"], dtype=jnp.float64)
-        arrays, ports, *_ = df.run_build_step(
-            setup, [("f", "frequency")], frequencies, pairs,
-            signal_solver=args.signal_solver, pack_noise=args.pack_noise,
-        )
+        arrays, ports, *_ = df.run_build_step(setup, [("f", "frequency")], frequencies, pairs)
         arrays["optimized_parameters"] = parameters
         return arrays, jnp.asarray(ports), parameters, frequencies, expected, pairs, jnp.asarray(1.0, dtype=jnp.float64)
 
@@ -276,7 +267,6 @@ def main():
     totals = [sum(sample.values()) for sample in repeat_samples]
     report = {
         "benchmark": "start-munich-2026-public-differometor-uifo-v2",
-        "simulation_mode": {"signal_solver": args.signal_solver, "packed_noise": args.pack_noise},
         "measured_at_utc": datetime.now(timezone.utc).isoformat(),
         "starter_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "source": {"public_repository": PUBLIC_REPO, "baseline_commit": BASELINE_COMMIT, **source},

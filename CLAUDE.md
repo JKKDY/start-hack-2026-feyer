@@ -18,7 +18,7 @@ Make one complete evaluation of the public Differometor simulator (Python + JAX,
 - Carrier, signal, noise, sensitivity, powers, loss, gradient all finite; gradient not identically zero.
 - Finite-difference check on `mb11.tuning` (steps 1e-3 and 5e-4, rtol 1%) must pass.
 - No precomputed answers, no omitted calculations. Fixture JSON files must stay byte-identical (SHA-checked).
-- Only edit `differometor/`. Don't modify `benchmark.py` (its hash is recorded in the report).
+- Only edit `differometor/`. Never modify `benchmark.py`: it must stay byte-identical to the original (`git diff 3b538f0 -- benchmark.py` is empty) because its hash is recorded in the report and the judges run the original. Anything the benchmark needs, such as a solver choice, must be the library default. For a variant (extra flags, profiling, other setups), copy it to a new file such as `benchmark_<purpose>.py` and edit the copy.
 
 ### ⚠️ Generality requirement (from the challenge provider)
 > "The goal is a simulator speedup that works beyond a specific setup. So the final evaluation will use a similar optical setup like the one included in the GitHub repo, but with slightly different parameters and components. Your simulator submissions should still work with that slight setup variation."
@@ -27,7 +27,7 @@ Consequences for every change:
 - Everything must be **derived from the loaded setup at build/trace time** — never hand-derived for this 3×3 UIFO. No hard-coded sizes (286, 751, 193, 101), port positions, detector counts, component lists, or "this fixture only uses functions X, Y".
 - Code paths this fixture never exercises (e.g. laser amplitude/frequency modulation functions, multiple detectors, carrier-changing parameter sweeps, empty index arrays) must still work.
 - Don't rely on this fixture's numerical headroom (current max log error 5.4e-6 vs 1e-5 limit). Different parameters may give worse-conditioned matrices (higher-finesse cavities) → keep pivoted LU and float64; no approximations.
-- The benchmark only checks the scored fixture, so a **generality test harness is mandatory** (see plan step 0b).
+- The benchmark only checks the scored fixture, so a **generality test harness is mandatory**: `python tests/check_general.py --suite all` must print ALL PASS (docs/correctness-harness.md).
 
 ### Submission
 Code, before/after JSON reports + plots, reproduction commands, short note on approach and correctness checks.
@@ -48,7 +48,7 @@ Laptop with 32 GB RAM, Windows → **WSL2 Ubuntu 24.04** (ships Python 3.12).
 
 ### Workflow
 - **Always pin to 1 CPU when timing** (`--cpus 1`, or `taskset -c 0` + `OMP_NUM_THREADS=1`). Unpinned runs mislead in both directions: XLA compiles in parallel (start_here.py: 5.0 s unpinned vs 13.6 s pinned), and execution oversubscribes threads under WSL (200 s vs 9.8 s).
-- Generality harness: `python tests/check_general.py` (13 cases, ~4 min, compares against `tests/reference/` saved from the unmodified simulator; `--cases a,b` for a subset). Must print ALL PASS after every change. References are git-ignored; regenerate with `--save` from an unmodified checkout (commit c10e851).
+- Correctness harness: `python tests/check_general.py` (scored fixture) or `--suite all` (13 setups), each at its nominal point plus fuzzed parameter sets, compared against `tests/reference/`. Must print ALL PASS after every change. References from `main` are committed in `tests/reference/`; `--save` regenerates them only when the cases or fuzz settings change. See docs/correctness-harness.md.
 - Profiling scripts live in `profiling/` (`prof_compile.py <variant>`, `prof_solve.py`, `prof_structure.py`, `prof_schur.py`).
 - Work on a git branch (`git checkout -b fast`); commit each experiment separately.
 - Fast check: `python benchmark.py --cpus 1 --repeats 3 --output runs/<name>.json` (~2–3 min; full 10 repeats ≈ 5 min).
@@ -145,7 +145,7 @@ Output shapes: carrier (286, 1), signal (751, 101), noise (101,).
 ## 7. Plan (in order) — steps 0, 0b, 1 DONE; recommended next: H1 → (H3 + H2 together as one custom_vjp solve core) → H4 → rest
 
 0. Install, run unmodified baseline locally: `python benchmark.py --cpus 1 --output runs/baseline.json --save-arrays runs/baseline.npz`.
-0b. **Build a generality test harness before changing anything** (e.g. `tests/check_general.py`, outside `differometor/`). Using the *unmodified* simulator, save reference outputs (carrier, signal, noise, sensitivity, powers, and gradient of a loss) for several setups: the scored fixture, `examples/data/uifo_20_5000.json`, the aLIGO setup (`examples/aligo.py`, `aligo_test_data.json`), Voyager (`examples/voyager.py`), the cavity example, plus a few **perturbed variants** of the scored UIFO (jittered parameters; if feasible, a component added/removed or a different detector port). After every change, rerun and compare with tight tolerances. A change that passes `benchmark.py` but fails here is not acceptable.
+0b. **Done:** `tests/check_general.py`, with references committed in `tests/reference/` (see docs/correctness-harness.md). Original plan: build a generality test harness before changing anything, outside `differometor/`. Using the *unmodified* simulator, save reference outputs (carrier, signal, noise, sensitivity, powers, and gradient of a loss) for several setups: the scored fixture, `examples/data/uifo_20_5000.json`, the aLIGO setup (`examples/aligo.py`, `aligo_test_data.json`), Voyager (`examples/voyager.py`), the cavity example, plus a few **perturbed variants** of the scored UIFO (jittered parameters; if feasible, a component added/removed or a different detector port). After every change, rerun and compare with tight tolerances. A change that passes `benchmark.py` but fails here is not acceptable.
 1. **Profile** (≈1 h): dump HLO (`XLA_FLAGS=--xla_dump_to=dump`) to measure forward/gradient program size; time `update()` vs the solves in isolation under jit; count nonzeros in carrier/signal/noise matrices; confirm or reject H1–H4.
 2. Quick wins: lazy plotly import (H5).
 3. Replace `vmap(switch)` with static per-function grouping (H1). Measure compile + runtime. Check PASS + npz comparison.

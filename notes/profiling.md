@@ -58,52 +58,7 @@ but a `custom_vjp` lets us choose what the residuals are (see H3).
 
 ## 2. Generality harness (plan step 0b) — `tests/check_general.py`
 
-```
-python tests/check_general.py --save     # once, unmodified simulator (done; refs in tests/reference/, git-ignored)
-python tests/check_general.py            # after every change (~4 min, pinned)
-python tests/check_general.py --cases uifo3_scored,aligo_am
-```
-
-13 cases, each run in a fresh, 1-CPU-pinned subprocess through **the same three-stage
-`jit(vjp)` → readout → backward structure as `benchmark.py`**. Custom VJPs and pytree tricks are therefore
-tested exactly as they will be scored:
-
-| Case | What it covers that the scored fixture doesn't |
-|---|---|
-| `uifo3_scored` | the benchmark workload itself (101 f) |
-| `uifo3_jitter` | all optimisable parameters perturbed; 37 f, 500–4000 Hz |
-| `uifo3_finesse` | 5× lower mirror transmissions, so worse conditioning; 23 f |
-| `uifo3_20_5000` | other trained UIFO: 2 signal detectors (balanced homodyne), 2 noise detectors, qhd phase, 7 squeezers |
-| `uifo2_rand_{space,am,fm}` | random 2×2 topologies; laser **amplitude/frequency modulation** functions |
-| `aligo_{space,am,fm}`, `voyager_{space,fm}` | classic detectors, all modulation modes, 2 lasers |
-| `cavity_tuning` | **carrier-changing sweep** (61 tunings), 3 power detectors, no noise detector |
-
-Quantities compared: carrier, signal (normwise relative), powers, noise and sensitivity (|Δ log|), loss, and the gradient of
-`mean(log10(sensitivity))` (normwise relative).
-
-**Tolerances are set from a per-case conditioning probe.** `--save` also re-runs every case with all
-non-length parameters nudged by 1e-15 relative (a few ulps), about the backward error a stable solver injects.
-The output change ("floor") shows how much a *legitimately different* algorithm may move each
-quantity. Gate = `clamp(10 × floor, MIN, MAX)`, where MAX for log-sensitivity is 1e-7 (100× tighter than the benchmark).
-If a quantity's floor already exceeds MAX, it is ill-conditioned and gets a loose `10 × floor` gate, flagged
-in the output. Floors (log-sensitivity / gradient, normwise relative):
-
-| case | sensitivity floor | gradient floor | note |
-|---|---:|---:|---|
-| uifo3_scored | 4.3e-8 | 2.0e-6 | noise floor 1.3e-7 → loose gate on noise |
-| uifo3_finesse | 6.6e-7 | 1.5e-5 | sensitivity is ill-conditioned (higher finesse) |
-| uifo3_20_5000 | 3.9e-7 | **0.45** | gradient essentially undetermined at round-off level |
-| 2×2 UIFOs, aLIGO | 1e-15 … 1e-7 | 1e-15 … 1e-7 | well-conditioned |
-| voyager_fm | **2.7** | **1.1** | detected FM signal ≈ 0 → sensitivity meaningless; crash/NaN test only |
-
-So the scored setup sits about 1 order of magnitude from "round-off decides the answer", and slightly higher-finesse
-variants are already beyond it. That supports the brief's warning: keep pivoted LU and float64, no shortcuts.
-
-Two calibration lessons: (1) a 1e-13 nudge was tried first and overestimated floors about 100× (a 1e-13 change of a
-360° tuning is roughly 3000 ulps of matrix perturbation), which flagged everything as ill-conditioned. (2) Lengths are excluded:
-a relative nudge on 4000 m is a physical phase change, not round-off.
-
-Self-check of the unmodified simulator against its own references: **ALL PASS, every error exactly 0** (deterministic), see `runs/harness_selfcheck.txt`.
+Moved to [docs/correctness-harness.md](../docs/correctness-harness.md). That document now covers the case list, the tolerance rule and its calibration, fuzzed parameter sets, timings, references generated from `main`, and results for this branch. The earlier single-point floors agree with the new nominal floors. For example, `uifo3_finesse` has a sensitivity floor of 6.6e-7 and `voyager_fm` 2.7.
 
 ## 3. Hypotheses
 

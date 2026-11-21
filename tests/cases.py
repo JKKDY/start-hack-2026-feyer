@@ -79,6 +79,45 @@ def _jitter(data, seed, finesse_boost=False):
     return data
 
 
+# Fuzz rules per optimised property, at scale 1. Each sample draws every parameter
+# independently from these rules, so one sample moves all 193 scored parameters at once.
+#   log-relative: value * exp(scale * U(-a, a))     additive: value + scale * U(-a, a)
+FUZZ_RULES = {
+    "reflectivity": ("power", 0.1),      # r ** exp(U(-0.1, 0.1)); stays in [0, 1], keeps exact 0 and 1
+    "tuning": ("add", 1.0),              # degrees
+    "angle": ("add", 5.0),               # degrees (squeezing / homodyne angles)
+    "db": ("add_nonneg", 1.0),           # squeezing level, kept >= 0
+    "power": ("log", 0.2),
+    "mass": ("log", 0.2),
+    "length": ("log", 0.05),             # tied grid lengths share one value, so they stay tied
+}
+DEFAULT_FUZZ_RULE = ("log", 0.05)
+FUZZ_VERSION = 1   # bump when the rules change; check mode refuses references from another version
+
+
+def fuzz_parameters(case, samples, seed, scale=1.0):
+    """Return (samples + 1, P) parameter sets: row 0 is the case's nominal point."""
+    initial = np.asarray(case["initial"], dtype=np.float64)
+    rng = np.random.default_rng(seed)
+    properties = [(p[0] if isinstance(p[0], list) else p)[1] for p in case["pairs"]]
+    rows = [initial]
+    for _ in range(samples):
+        values = initial.copy()
+        for i, prop in enumerate(properties):
+            kind, width = FUZZ_RULES.get(prop, DEFAULT_FUZZ_RULE)
+            u = rng.uniform(-width, width) * scale
+            if kind == "power":
+                values[i] = float(np.clip(values[i] ** np.exp(u), 0.0, 1.0))
+            elif kind == "log":
+                values[i] = values[i] * np.exp(u) if values[i] != 0 else u
+            elif kind == "add":
+                values[i] += u
+            elif kind == "add_nonneg":
+                values[i] = max(0.0, values[i] + u)
+        rows.append(values)
+    return np.stack(rows)
+
+
 def _load(name):
     return json.loads((DATA / name).read_text())
 
@@ -126,3 +165,7 @@ def _cavity():
     case = _generic_case(S, np.linspace(-180, 180, 61), changing=("m0", "tuning"),
                          properties=["reflectivity", "power", "length"])
     return case
+
+
+# --suite scored: only the benchmark workload. --suite all: every case above.
+SUITES = {"scored": ["uifo3_scored"], "all": list(CASES)}

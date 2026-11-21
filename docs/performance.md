@@ -28,6 +28,18 @@ Every trial passed the benchmark's reference sensitivity check and its two-step 
 
 The final branch's gradient relative L2 difference from the original was **1.90×10⁻⁸** at the saved point and **1.31×10⁻⁷** at the perturbed point. The detector selection cleanup left the gradient unchanged at both points relative to grouped evaluation.
 
+## Follow-up JAX experiments
+
+These candidates were tested independently on top of `089afa2`, with the same workload and CPU configuration. Both passed the benchmark and matched all 193 gradients at the saved and perturbed points.
+
+| Variant | First run incl. JIT (s) | JIT (s) | Warm median (s) | Repeat first run incl. JIT (s) |
+| --- | ---: | ---: | ---: | ---: |
+| Detector selection control | 41.50 | 15.62 | 18.57 | 42.57 |
+| Simplified parameter-sweep scatter | 75.19 | 14.81 | 17.10 | 44.35 |
+| Checkpointed component coefficients | 36.85 | 15.17 | 19.19 | 48.80 |
+
+Neither change was retained. The sweep scatter was faster warm but slower in both first-run measurements. The retest preserved the existing path for parameter arrays already expanded by a carrier sweep. Checkpointing reduced forward compilation time in the repeat from 9.17 s to 6.19 s, while gradient compilation rose from 5.12 s to 9.17 s. Its first-run improvement did not repeat, and the warm median was slightly slower.
+
 ## Benchmarking further changes
 
 Run each candidate and its control in fresh processes on the same hardware and pinned dependency versions. Use the complete first-run total for the main comparison and record JIT, warm runtime, and peak process memory separately. Repeat close first-run comparisons in reverse order. Compare full physical outputs and gradients at both parameter points before retaining a change.

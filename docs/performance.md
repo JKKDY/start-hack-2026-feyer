@@ -119,7 +119,7 @@ The native backend at `2e61add` leaves small JAX wrappers around the host calls.
 
 In a second interleaved comparison, adding `--xla_cpu_parallel_codegen_split_count=1` to level 0 took 1.550 s cold and 0.464 s JIT, versus 1.505 s and 0.436 s with level 0 alone. Both medians are from three fresh processes. Every run passed the benchmark's sensitivity and gradient spot checks. The largest log-sensitivity and gradient spot-check errors were 5.37 × 10⁻⁶ and 1.06 × 10⁻⁸. Level 0 alone passed all 13 setups at nominal and perturbed parameters. In a representative level 0 run, compilation and tracing took 0.134 s for forward, 0.153 s for readout, and 0.142 s for backward.
 
-For a cold-first application run, set `XLA_FLAGS=--xla_backend_optimization_level=0` in the process environment before starting Python with `DIFFEROMETOR_NATIVE=1`. The benchmark already selects CPU and double precision and disables the persistent cache. Keep the flag in the launch environment because it configures every XLA compilation in the process. [JAX XLA configuration](https://docs.jax.dev/en/latest/controlling-xla.html)
+For a cold-first application run, `benchmark_slim.py` supplies `--xla_backend_optimization_level=0` when `DIFFEROMETOR_NATIVE=1` and `XLA_FLAGS` is unset. For the original benchmark, set the flag in the launch environment. The benchmark already selects CPU and double precision and disables the persistent cache. XLA takes its flags from the launch environment because they apply to the whole process. [JAX XLA configuration](https://docs.jax.dev/en/latest/controlling-xla.html)
 
 ### Ahead-of-time compilation feasibility
 
@@ -211,7 +211,9 @@ Build with `python -m pip install -e .` using a C++ compiler and set `DIFFEROMET
 
 For a quick cold-start measurement, run `python benchmark_slim.py` in a fresh process. The [slim runner](../benchmark_slim.py) uses the public UIFO fixture and the scored benchmark's forward, readout and gradient functions. Its single wall-clock time includes imports, CPU initialization, setup, JIT and transfer of the results back to the host. Use `benchmark.py` for the scored result, correctness checks, warm repeats and per-phase timings.
 
-On the pinned Windows CPU described above, the slim runner matched the scored benchmark exactly for the carrier and signal fields, noise, sensitivity, powers, loss, and all 193 gradient entries.
+On the pinned Windows CPU described above, the slim runner's packed path matched the scored benchmark exactly for the carrier and signal fields, noise, sensitivity, powers, loss, and all 193 gradient entries.
+
+With the native backend selected, the slim runner compiles a single `jax.value_and_grad` for the same simulation and readout. In three fresh interleaved runs at XLA level 0, median tracing and compilation fell from 0.437 s for the split path to 0.393 s for the fused path. Median cold time fell from 1.570 s to 1.527 s, with run-to-run variation larger than this difference. The outputs and loss matched exactly. The full gradient matched within `rtol=1e-8, atol=1e-12`. The original benchmark continues to compile its three stages separately.
 
 Two tools cover a change:
 

@@ -6,6 +6,7 @@ from time import perf_counter
 
 def run():
     import json
+    import os
     from pathlib import Path
 
     # The original benchmark configures the CPU before importing JAX.
@@ -41,6 +42,20 @@ def run():
     arrays, ports, *_ = df.run_build_step(setup, [("f", "frequency")], frequencies, pairs)
     arrays["optimized_parameters"] = parameters
     ports = jnp.asarray(ports)
+
+    if os.environ.get("DIFFEROMETOR_NATIVE") == "1":
+        from benchmark import readout
+
+        def objective(values, inputs, detectors, target):
+            optics = df.simulate(**dict(inputs, optimized_parameters=values))
+            loss, (sensitivity, powers) = readout(optics, detectors, target)
+            return loss, (optics, sensitivity, powers)
+
+        arguments = parameters, arrays, ports, expected
+        evaluate = jax.jit(jax.value_and_grad(objective, has_aux=True)).lower(*arguments).compile()
+        (loss, (outputs, sensitivity, powers)), gradient = evaluate(*arguments)
+        return jax.device_get((outputs, sensitivity, powers, loss, gradient))
+
     seed = jnp.asarray(1.0, dtype=jnp.float64)
 
     forward = jax.jit(forward_with_pullback).lower(parameters, arrays).compile()
@@ -54,6 +69,10 @@ def run():
 
 if __name__ == "__main__":
     start = perf_counter()
+    import os
+
+    if os.environ.get("DIFFEROMETOR_NATIVE") == "1":
+        os.environ.setdefault("XLA_FLAGS", "--xla_backend_optimization_level=0")
     run()
     elapsed = perf_counter() - start
     print(f"Complete first run (including JIT): {elapsed:.6f} s")

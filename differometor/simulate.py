@@ -466,14 +466,19 @@ def group_component_instructions(arrays):
             continue
         calls = np.unique(output_rows[positions])
         groups[index] = (
-            jnp.asarray(inputs[calls]),
-            jnp.asarray(np.searchsorted(calls, output_rows[positions])),
-            jnp.asarray(output_columns[positions]),
+            np.asarray(inputs[calls]),
+            np.searchsorted(calls, output_rows[positions]),
+            np.asarray(output_columns[positions]),
         )
         output_positions.append(positions)
 
-    permutation = jnp.asarray(np.argsort(np.concatenate(output_positions)))
+    permutation = np.argsort(np.concatenate(output_positions))
     return None, tuple(groups), permutation, *placement
+
+
+def _to_jax_data(leaf):
+    """NumPy float/complex build output -> JAX array (device transfer only)."""
+    return jnp.asarray(leaf) if isinstance(leaf, np.ndarray) else leaf
 
 
 def run_build_step(
@@ -566,7 +571,10 @@ def run_build_step(
         simulation_arrays["packed_noise"] = pack_noise_template(matrices[3], noise_arrays[3])
 
     # Integer/bool index arrays become compile-time constants (see differometor/static.py).
-    simulation_arrays = make_static(simulation_arrays)
+    # The build works in NumPy; remaining float/complex data is handed to JAX here with a plain
+    # device transfer (no compilation), so eager callers of simulate() still get JAX arrays.
+    simulation_arrays = jax.tree_util.tree_map(_to_jax_data, make_static(simulation_arrays))
+    metadata = tuple(_to_jax_data(value) for value in metadata)  # port indices; port_to_index dict passes through
 
     if timeit:
         for array in simulation_arrays.values():

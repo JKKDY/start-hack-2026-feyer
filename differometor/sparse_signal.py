@@ -31,7 +31,7 @@ def pack_noise_template(template, update_indices):
     updates = np.asarray(update_indices)
     coordinates, inverse = np.unique(np.concatenate((initial, updates), axis=1).T, axis=0, return_inverse=True)
     rows, columns = coordinates.T
-    return PackedNoise(*(jnp.asarray(value) for value in (
+    return PackedNoise(*(np.asarray(value) for value in (
         matrix[rows, columns], inverse[initial.shape[1]:], rows, columns,
     )))
 
@@ -47,7 +47,7 @@ def build_signal_pattern(template, update_indices, coupling_indices):
         possible[rows[matrix_entries], columns[matrix_entries]] = True
     columns, rows = np.nonzero(possible.T)
     pointers = np.concatenate(([0], np.cumsum(np.bincount(columns, minlength=size))))
-    return tuple(jnp.asarray(array, dtype=jnp.int32) for array in (rows, columns, pointers))
+    return tuple(np.asarray(array, dtype=np.int32) for array in (rows, columns, pointers))
 
 
 def pack_signal_template(template, pattern, update_indices, coupling_indices, carrier_size):
@@ -68,7 +68,7 @@ def pack_signal_template(template, pattern, update_indices, coupling_indices, ca
     conjugate = (lower_rows & (slot_columns >= carrier_size)) | (
         (slot_rows >= 2 * carrier_size) & (slot_columns < carrier_size)
     )
-    return PackedSignal(*(jnp.asarray(value) for value in (packed, update_slots, coupling_slots, conjugate)))
+    return PackedSignal(*(np.asarray(value) for value in (packed, update_slots, coupling_slots, conjugate)))
 
 
 # Fixed-precision iterative refinement steps applied after every sparse solve.

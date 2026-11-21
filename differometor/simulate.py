@@ -21,13 +21,15 @@ import jax
 from time import time
 import jax.numpy as jnp
 import numpy as np
+from functools import partial
+from typing import NamedTuple
 from jax import lax, vmap, jit
 
 from differometor.setups import Setup
 from differometor.build import build, pairs_to_arrays, prepare_arrays, LINKING_FUNCTIONS
 from differometor.components import FUNCTIONS, UNIT_VACUUM, H_PLANCK, F0
 from differometor.sparse_signal import build_signal_pattern, pack_noise_template, pack_signal_template, solve_signal_and_adjoint
-from differometor.static import make_static, unwrap_static
+from differometor.static import StaticArray, make_static, unwrap_static
 
 
 jax.config.update("jax_enable_x64", True)
@@ -62,7 +64,50 @@ def solve(matrix: jnp.ndarray, right_hand_side: jnp.ndarray) -> jnp.ndarray:
     return jnp.linalg.solve(matrix, right_hand_side)
 
 
-def component_coefficients(parameters, function_input_indices, output_indices, function_indices):
+class ConstantParameters(NamedTuple):
+    """Trace-time knowledge about which parameter values can never change.
+
+    values:  the setup's base parameter row as NumPy, shape (1, P)
+    dynamic: bool mask, True where simulate() may overwrite the value (optimised,
+             linked or swept parameters); everything else is fixed by the setup.
+    """
+
+    values: np.ndarray
+    dynamic: np.ndarray
+
+
+class _Columns:
+    """Lets a component function index its inputs (`parameters[i]`) when the columns
+    are a mix of NumPy constants and traced arrays (no stacking, so constness survives)."""
+
+    __slots__ = ("columns",)
+
+    def __init__(self, columns):
+        self.columns = columns
+
+    def __getitem__(self, index):
+        return self.columns[index]
+
+    def __len__(self):
+        return len(self.columns)
+
+
+def _group_inputs(parameters, inputs, constants):
+    """Input columns for one function group: a column whose entries all refer to fixed
+    parameters becomes a NumPy constant (XLA folds everything computed from it, and AD
+    emits no derivative code or residuals for it); other columns are gathered from the
+    traced parameter row as before."""
+    columns = []
+    for column in range(inputs.shape[1]):
+        indices = inputs[:, column]
+        if constants.dynamic[indices].any():
+            columns.append(parameters[indices])
+        else:
+            columns.append(constants.values[0, indices])
+    return columns
+
+
+def component_coefficients(parameters, function_input_indices, output_indices, function_indices, constants=None):
     """Evaluate and select the coefficients written by the component instructions."""
     if isinstance(function_indices, tuple):
         coefficients = []
@@ -70,7 +115,10 @@ def component_coefficients(parameters, function_input_indices, output_indices, f
             if group is None:
                 continue
             inputs, rows, columns = group
-            values = vmap(function)(parameters[inputs])
+            if constants is not None and isinstance(inputs, np.ndarray):
+                values = vmap(lambda *cols, f=function: f(_Columns(cols)))(*_group_inputs(parameters, inputs, constants))
+            else:
+                values = vmap(function)(parameters[inputs])
             coefficients.append(values[rows, columns])
         return jnp.concatenate(coefficients)[output_indices]
 
@@ -86,6 +134,7 @@ def update(
     output_indices: tuple[jnp.ndarray, jnp.ndarray],
     matrix_indices: tuple[jnp.ndarray, jnp.ndarray],
     function_indices: jnp.ndarray,
+    constants: "ConstantParameters | None" = None,
 ) -> jnp.ndarray:
     """
     Update selected entries of a system matrix by evaluating component functions.
@@ -125,8 +174,11 @@ def update(
     Python list of callables referenced as a global is treated as static during
     tracing, which keeps the function jittable as long as the list is stable.
     """
-    outputs = component_coefficients(parameters, function_input_indices, output_indices, function_indices)
+    outputs = component_coefficients(parameters, function_input_indices, output_indices, function_indices, constants)
     return matrix.at[matrix_indices[0], matrix_indices[1]].set(outputs)
+
+
+_update = update
 
 
 def expand_parameters(array: jnp.ndarray, indices: jnp.ndarray, values: jnp.ndarray) -> jnp.ndarray:
@@ -306,7 +358,7 @@ def simulate(
         signal_function_input_indices, signal_function_indices, signal_output_indices, signal_matrix_indices,
         signal_carrier_indices, signal_carrier_placing_indices,
         noise_function_input_indices, noise_function_indices, noise_output_indices, noise_system_matrix_indices,
-        signal_sparsity, packed_signal, packed_noise,
+        signal_sparsity, packed_signal, packed_noise, parameters,
     ) = unwrap_static((
         optimized_parameter_indices, optimized_value_indices, carrier_changing_parameter_indices,
         signal_changing_parameter_indices, qhd_parameter_indices, qhd_placing_indices,
@@ -315,8 +367,21 @@ def simulate(
         signal_function_input_indices, signal_function_indices, signal_output_indices, signal_matrix_indices,
         signal_carrier_indices, signal_carrier_placing_indices,
         noise_function_input_indices, noise_function_indices, noise_output_indices, noise_system_matrix_indices,
-        signal_sparsity, packed_signal, packed_noise,
+        signal_sparsity, packed_signal, packed_noise, parameters,
     ))
+
+    # Fixed parameter values are known at trace time when the base row arrives as a StaticArray
+    # (run_build_step): component inputs built only from them become compile-time constants.
+    constants = None
+    if isinstance(parameters, np.ndarray) and isinstance(optimized_parameter_indices, np.ndarray):
+        dynamic = np.zeros(parameters.shape[1], dtype=bool)
+        for written in (optimized_parameter_indices, indices_to_link,
+                        carrier_changing_parameter_indices, signal_changing_parameter_indices):
+            dynamic[np.asarray(written).reshape(-1)] = True
+        constants = ConstantParameters(parameters, dynamic)
+    parameters = jnp.asarray(parameters)
+    update = partial(_update, constants=constants)
+    coefficients_of = partial(component_coefficients, constants=constants)
 
     # Insert optimized parameter values into the base parameter row.
     parameters = parameters.at[[0], optimized_parameter_indices].set(
@@ -369,7 +434,7 @@ def simulate(
         signal_matrix = signal_matrix.at[lower_coupling].set(signal_matrix[lower_coupling].conj())
         signal_rhs = signal_matrix[:, :, -1]
     else:
-        updates = vmap(component_coefficients, in_axes=(0, None, None, None))(
+        updates = vmap(coefficients_of, in_axes=(0, None, None, None))(
             parameters, signal_function_input_indices, signal_output_indices, signal_function_indices,
         )
         coefficients = jnp.broadcast_to(packed_signal.template, (parameters.shape[0], packed_signal.template.size))
@@ -436,7 +501,7 @@ def simulate(
         noise_sources = jnp.einsum("bij,dbj->dbi", noise_matrix, noise_weights)
         variance_terms = noise_weights.conj() * noise_sources
     else:
-        updates = vmap(component_coefficients, in_axes=(0, None, None, None))(
+        updates = vmap(coefficients_of, in_axes=(0, None, None, None))(
             parameters, noise_function_input_indices, noise_output_indices, noise_function_indices,
         )
         values = jnp.broadcast_to(packed_noise.template, (updates.shape[0], packed_noise.template.size))
@@ -574,6 +639,10 @@ def run_build_step(
     # The build works in NumPy; remaining float/complex data is handed to JAX here with a plain
     # device transfer (no compilation), so eager callers of simulate() still get JAX arrays.
     simulation_arrays = jax.tree_util.tree_map(_to_jax_data, make_static(simulation_arrays))
+    # The base parameter row is fixed by the setup (optimised/swept/linked entries are overwritten
+    # inside simulate). Making it static lets simulate() fold everything that depends only on
+    # fixed parameters at compile time. Changing it forces a recompile, never a stale result.
+    simulation_arrays["parameters"] = StaticArray(np.asarray(simulation_arrays["parameters"]))
     metadata = tuple(_to_jax_data(value) for value in metadata)  # port indices; port_to_index dict passes through
 
     if timeit:

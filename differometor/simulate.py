@@ -27,6 +27,7 @@ from differometor.setups import Setup
 from differometor.build import build, pairs_to_arrays, prepare_arrays, LINKING_FUNCTIONS
 from differometor.components import FUNCTIONS, UNIT_VACUUM, H_PLANCK, F0
 from differometor.sparse_signal import build_signal_pattern, pack_noise_template, pack_signal_template, solve_signal_and_adjoint
+from differometor.static import make_static, unwrap_static
 
 
 jax.config.update("jax_enable_x64", True)
@@ -295,6 +296,28 @@ def simulate(
     - Conjugation and block manipulation follow the conventions used for upper and lower
       sidebands in frequency-domain interferometer models.
     """
+    # Index arrays from `run_build_step` arrive as StaticArray nodes (compile-time
+    # constants under jit); turn them back into plain NumPy arrays. No-op otherwise.
+    (
+        optimized_parameter_indices, optimized_value_indices, carrier_changing_parameter_indices,
+        signal_changing_parameter_indices, qhd_parameter_indices, qhd_placing_indices,
+        linked_indices, linking_function_indices, indices_to_link,
+        carrier_function_input_indices, carrier_function_indices, carrier_output_indices, carrier_matrix_indices,
+        signal_function_input_indices, signal_function_indices, signal_output_indices, signal_matrix_indices,
+        signal_carrier_indices, signal_carrier_placing_indices,
+        noise_function_input_indices, noise_function_indices, noise_output_indices, noise_system_matrix_indices,
+        signal_sparsity, packed_signal, packed_noise,
+    ) = unwrap_static((
+        optimized_parameter_indices, optimized_value_indices, carrier_changing_parameter_indices,
+        signal_changing_parameter_indices, qhd_parameter_indices, qhd_placing_indices,
+        linked_indices, linking_function_indices, indices_to_link,
+        carrier_function_input_indices, carrier_function_indices, carrier_output_indices, carrier_matrix_indices,
+        signal_function_input_indices, signal_function_indices, signal_output_indices, signal_matrix_indices,
+        signal_carrier_indices, signal_carrier_placing_indices,
+        noise_function_input_indices, noise_function_indices, noise_output_indices, noise_system_matrix_indices,
+        signal_sparsity, packed_signal, packed_noise,
+    ))
+
     # Insert optimized parameter values into the base parameter row.
     parameters = parameters.at[[0], optimized_parameter_indices].set(
         optimized_parameters[optimized_value_indices]
@@ -541,6 +564,9 @@ def run_build_step(
             )
     if pack_noise:
         simulation_arrays["packed_noise"] = pack_noise_template(matrices[3], noise_arrays[3])
+
+    # Integer/bool index arrays become compile-time constants (see differometor/static.py).
+    simulation_arrays = make_static(simulation_arrays)
 
     if timeit:
         for array in simulation_arrays.values():

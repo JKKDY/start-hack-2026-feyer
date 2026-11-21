@@ -72,7 +72,8 @@ def component_coefficients(parameters, function_input_indices, output_indices, f
             inputs, rows, columns = group
             values = vmap(function)(parameters[inputs])
             coefficients.append(values[rows, columns])
-        return jnp.concatenate(coefficients)[output_indices]
+        values = jnp.concatenate(coefficients)
+        return values if output_indices is None else values[output_indices]
 
     function_inputs = parameters[function_input_indices]
     output_matrix = vmap(lambda i, x: lax.switch(i, FUNCTIONS, x))(function_indices, function_inputs)
@@ -466,13 +467,13 @@ def group_component_instructions(arrays):
             continue
         calls = np.unique(output_rows[positions])
         groups[index] = (
-            jnp.asarray(inputs[calls]),
-            jnp.asarray(np.searchsorted(calls, output_rows[positions])),
-            jnp.asarray(output_columns[positions]),
+            np.asarray(inputs[calls]),
+            np.asarray(np.searchsorted(calls, output_rows[positions])),
+            np.asarray(output_columns[positions]),
         )
         output_positions.append(positions)
 
-    permutation = jnp.asarray(np.argsort(np.concatenate(output_positions)))
+    permutation = np.asarray(np.argsort(np.concatenate(output_positions)))
     return None, tuple(groups), permutation, *placement
 
 
@@ -564,6 +565,20 @@ def run_build_step(
             )
     if pack_noise:
         simulation_arrays["packed_noise"] = pack_noise_template(matrices[3], noise_arrays[3])
+
+    # Place grouped component outputs directly into their packed slots when
+    # destinations are unique. Keep original write order for duplicate slots.
+    for packed_key, output_key in (
+        ("packed_signal", "signal_output_indices"),
+        ("packed_noise", "noise_output_indices"),
+    ):
+        packed = simulation_arrays.get(packed_key)
+        if packed is not None:
+            slots = np.asarray(packed.update_slots)
+            if np.unique(slots).size == slots.size:
+                order = np.argsort(simulation_arrays[output_key])
+                simulation_arrays[packed_key] = packed._replace(update_slots=slots[order])
+                simulation_arrays[output_key] = None
 
     # Integer/bool index arrays become compile-time constants (see differometor/static.py).
     simulation_arrays = make_static(simulation_arrays)

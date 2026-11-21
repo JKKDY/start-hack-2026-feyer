@@ -1426,11 +1426,11 @@ def build(setup: Setup):
             jnp.array(signal_matrix),
             jnp.array(noise_matrix, dtype=complex),
             jnp.array(noise_selection_vectors, dtype=complex),
-            jnp.array(qhd_parameter_indices, dtype=int),
-            jnp.array(qhd_placing_indices, dtype=int),
-            jnp.array(linked_indices, dtype=int),
-            jnp.array(linking_function_indices, dtype=int),
-            jnp.array(indices_to_link, dtype=int),
+            np.array(qhd_parameter_indices, dtype=int),
+            np.array(qhd_placing_indices, dtype=int),
+            np.array(linked_indices, dtype=int),
+            np.array(linking_function_indices, dtype=int),
+            np.array(indices_to_link, dtype=int),
         ),
         (
             jnp.array(detector_indices, dtype=int),
@@ -1634,10 +1634,10 @@ def pairs_to_arrays(
         if len(arrays["function_input_indices"]) == 0:
             # Dummy update that leaves matrices unchanged.
             return (
-                jnp.array([[0, 0, 0]]),
-                jnp.array([FUNCTIONS.index(dummy_function)]),
-                jnp.array([[0], [0]]),
-                jnp.array([[0], [0]]),
+                np.array([[0, 0, 0]]),
+                np.array([FUNCTIONS.index(dummy_function)]),
+                np.array([[0], [0]]),
+                np.array([[0], [0]]),
             )
 
         function_input_indices = np.vstack(arrays["function_input_indices"])
@@ -1656,27 +1656,27 @@ def pairs_to_arrays(
                 )
 
             return (
-                jnp.array(function_input_indices, dtype=int),
-                jnp.array(arrays["function_indices"], dtype=int),
-                jnp.array(output_indices, dtype=int),
-                jnp.array(system_matrix_indices, dtype=int),
-                jnp.array(carrier_solution_indices, dtype=int),
-                jnp.array(carrier_solution_placing_indices, dtype=int),
+                np.array(function_input_indices, dtype=int),
+                np.array(arrays["function_indices"], dtype=int),
+                np.array(output_indices, dtype=int),
+                np.array(system_matrix_indices, dtype=int),
+                np.array(carrier_solution_indices, dtype=int),
+                np.array(carrier_solution_placing_indices, dtype=int),
             )
 
         return (
-            jnp.array(function_input_indices, dtype=int),
-            jnp.array(arrays["function_indices"], dtype=int),
-            jnp.array(output_indices, dtype=int),
-            jnp.array(system_matrix_indices, dtype=int),
+            np.array(function_input_indices, dtype=int),
+            np.array(arrays["function_indices"], dtype=int),
+            np.array(output_indices, dtype=int),
+            np.array(system_matrix_indices, dtype=int),
         )
 
     return (
         (
-            jnp.array(optimized_parameter_indices, dtype=int),
-            jnp.array(optimization_value_indices, dtype=int),
-            jnp.array(carrier_changing_parameter_indices, dtype=int),
-            jnp.array(signal_changing_parameter_indices, dtype=int),
+            np.array(optimized_parameter_indices, dtype=int),
+            np.array(optimization_value_indices, dtype=int),
+            np.array(carrier_changing_parameter_indices, dtype=int),
+            np.array(signal_changing_parameter_indices, dtype=int),
         ),
         combine_arrays(carrier_arrays),
         combine_arrays(signal_arrays, signal=True),

@@ -13,7 +13,7 @@ The references are committed in `tests/reference/`, so a fresh checkout can veri
 
 Run `--save` again only when the cases, the fuzz rules (`FUZZ_VERSION`), the sample settings or the reference ref change. Then commit the new `tests/reference/` with that change.
 
-Claude Code agents also get these steps as the project skill `verify-change`, in [`.claude/skills/verify-change/SKILL.md`](../.claude/skills/verify-change/SKILL.md). The skill points back to this document.
+Agents also get these steps as the project skill `verify-change`. Claude Code reads it from [`.claude/skills/verify-change/SKILL.md`](../.claude/skills/verify-change/SKILL.md) and Codex from [`.agents/skills/verify-change/SKILL.md`](../.agents/skills/verify-change/SKILL.md). The two files must stay identical, so edit both together. The skill points back to this document.
 
 ## Commands
 

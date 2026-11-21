@@ -161,6 +161,10 @@ The original scored harness has an explicit lower-and-compile step for each of i
 
 ## Benchmarking further changes
 
+For a quick cold-start measurement, run `python benchmark_slim.py` in a fresh process. The [slim runner](../benchmark_slim.py) uses the public UIFO fixture and the scored benchmark's forward, readout and gradient functions. Its single wall-clock time includes imports, CPU initialization, setup, JIT and transfer of the results back to the host. Use `benchmark.py` for the scored result, correctness checks, warm repeats and per-phase timings.
+
+On the pinned Windows CPU described above, the slim runner matched the scored benchmark exactly for the carrier and signal fields, noise, sensitivity, powers, loss, and all 193 gradient entries.
+
 Two tools cover a change:
 
 - **Correctness:** `python tests/check_general.py --suite all` compares carrier, signal, noise, sensitivity, powers and gradients with committed references from the unmodified simulator. It covers 13 setups, each at its saved parameters and at 4 fuzzed parameter sets, and also records timings per case. It pins itself to one CPU on Linux and on native Windows. See [Correctness and timing harness](correctness-harness.md).

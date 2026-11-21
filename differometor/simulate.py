@@ -20,6 +20,7 @@ Conventions used throughout:
 import jax
 from time import time
 import jax.numpy as jnp
+import numpy as np
 from jax import lax, vmap, jit
 
 from differometor.setups import Setup
@@ -57,6 +58,23 @@ def solve(matrix: jnp.ndarray, right_hand_side: jnp.ndarray) -> jnp.ndarray:
     right_hand_side = right_hand_side.astype(jnp.complex128)
     matrix = matrix.astype(jnp.complex128)
     return jnp.linalg.solve(matrix, right_hand_side)
+
+
+def component_coefficients(parameters, function_input_indices, output_indices, function_indices):
+    """Evaluate and select the coefficients written by the component instructions."""
+    if isinstance(function_indices, tuple):
+        coefficients = []
+        for function, group in zip(FUNCTIONS, function_indices, strict=True):
+            if group is None:
+                continue
+            inputs, rows, columns = group
+            values = vmap(function)(parameters[inputs])
+            coefficients.append(values[rows, columns])
+        return jnp.concatenate(coefficients)[output_indices]
+
+    function_inputs = parameters[function_input_indices]
+    output_matrix = vmap(lambda i, x: lax.switch(i, FUNCTIONS, x))(function_indices, function_inputs)
+    return output_matrix[output_indices[0], output_indices[1]]
 
 
 def update(
@@ -105,9 +123,7 @@ def update(
     Python list of callables referenced as a global is treated as static during
     tracing, which keeps the function jittable as long as the list is stable.
     """
-    function_inputs = parameters[function_input_indices]
-    output_matrix = vmap(lambda i, x: lax.switch(i, FUNCTIONS, x))(function_indices, function_inputs)
-    outputs = output_matrix[output_indices[0], output_indices[1]]
+    outputs = component_coefficients(parameters, function_input_indices, output_indices, function_indices)
     return matrix.at[matrix_indices[0], matrix_indices[1]].set(outputs)
 
 
@@ -412,6 +428,32 @@ def simulate(
     return carrier.T, signal.T, noise.squeeze()
 
 
+def group_component_instructions(arrays):
+    """Group calls by component function and restore the original scatter order."""
+    function_inputs, functions, (output_rows, output_columns), *placement = arrays
+    inputs = np.asarray(function_inputs)
+    functions = np.asarray(functions)
+    output_rows = np.asarray(output_rows)
+    output_columns = np.asarray(output_columns)
+    output_functions = functions[output_rows]
+    groups = [None] * len(FUNCTIONS)
+    output_positions = []
+    for index in range(len(FUNCTIONS)):
+        positions = np.flatnonzero(output_functions == index)
+        if not positions.size:
+            continue
+        calls = np.unique(output_rows[positions])
+        groups[index] = (
+            jnp.asarray(inputs[calls]),
+            jnp.asarray(np.searchsorted(calls, output_rows[positions])),
+            jnp.asarray(output_columns[positions]),
+        )
+        output_positions.append(positions)
+
+    permutation = jnp.asarray(np.argsort(np.concatenate(output_positions)))
+    return None, tuple(groups), permutation, *placement
+
+
 def run_build_step(
     setup: Setup,
     changing_pairs: list | None = None,
@@ -463,6 +505,9 @@ def run_build_step(
     arrays_to_prepare, carrier_arrays, signal_arrays, noise_arrays = pairs_to_arrays(
         *instructions, optimization_pairs, changing_pairs
     )
+    carrier_arrays = group_component_instructions(carrier_arrays)
+    signal_arrays = group_component_instructions(signal_arrays)
+    noise_arrays = group_component_instructions(noise_arrays)
     prepared_arrays = prepare_arrays(*arrays_to_prepare, changing_values, parameters=matrices[0])
 
     arg_count = simulate.__code__.co_argcount

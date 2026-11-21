@@ -65,6 +65,11 @@ The control's first runs ranged from 17.14 s to 18.17 s. Sweep indexing was fast
 
 ## Benchmarking further changes
 
+Two tools cover a change:
+
+- **Correctness:** `python tests/check_general.py --suite all` compares carrier, signal, noise, sensitivity, powers and gradients with committed references from the unmodified simulator. It covers 13 setups, each at its saved parameters and at 4 fuzzed parameter sets, and also records timings per case. It pins itself to one CPU on Linux and on native Windows. See [Correctness and timing harness](correctness-harness.md).
+- **Scored time:** `benchmark.py`, as below. Its `--cpus` flag works only on Linux or WSL.
+
 Run each candidate and its control in fresh processes on the same hardware and pinned dependency versions. Use the complete first-run total for the main comparison and record JIT, warm runtime, and peak process memory separately. Repeat close first-run comparisons in reverse order. Compare full physical outputs and gradients at both parameter points before retaining a change.
 
 On Linux or WSL, the standard benchmark command is:
@@ -94,9 +99,9 @@ The table above uses the original simulator as its numerical reference. Against 
 
 On the 21-frequency grid, the new code's default dense path reproduced the previous physical outputs and loss bit for bit. Its maximum absolute gradient difference was 6.90×10⁻⁹.
 
-The fully packed build is the benchmark default. Its acceptance covers the fixed benchmark workload, the supplied checks, and the tested full-gradient comparisons. The library's `run_build_step()` still defaults to dense and accepts `signal_solver="packed", pack_noise=True` for callers that opt in. The mixed-precision refinement below remains a diagnostic.
+On `chris/static-indices` and `chris/numpy-build`, `benchmark.py` carries the `--signal-solver` flag from `47cc00a`, which defaults to packed. The library's `run_build_step()` still defaults to dense. The challenge forbids changes to `benchmark.py`, and the unmodified harness calls `run_build_step()` with its defaults. On these branches the official benchmark therefore runs the dense path. `baseline_plus_sparsity` (`894e6b9`) instead restores the original `benchmark.py` and makes packed the library default. Its acceptance covers the fixed benchmark workload, the supplied checks, and the tested full-gradient comparisons. The mixed-precision refinement below remains a diagnostic.
 
-On Linux or WSL, compare the default build with the dense reference:
+On branches with the modified `benchmark.py`, on Linux or WSL, compare the packed and dense builds:
 
 ```bash
 python benchmark.py --cpus 1 --repeats 3 --output benchmark-packed.json --save-arrays packed.npz

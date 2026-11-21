@@ -149,3 +149,9 @@ Both runs used the references above, on the same machine. On this branch `run_bu
 | other 9 cases | 9.3–17.0, 1.4–2.8× | 0.006–0.376 | 8.0–16.0, 1.6–3.2× | 0.015–0.053 | ≤ 1.4e-7, except `voyager_fm` | ≤ 4.9e-8, except `voyager_fm` |
 
 All 13 cases passed in both modes. The dense path reproduced the reference carrier, signal and powers bit for bit. The packed path's largest errors were on `voyager_fm`: 6.7e-2 in sensitivity and 1.2e-3 in gradient. Both are within that case's loose gate, set by floors of 2.7 and 0.90. `cavity_tuning` warm time was slower with packed (0.015 s against 0.009 s) because it has no noise detector and almost no signal system to solve.
+
+## Results on `chris/numpy-build` (`b5fbf90`)
+
+The build step now runs in NumPy, and this commit merges the harness into the branch. All 13 cases passed in both modes, with the same errors as on `chris/static-indices`. For `uifo3_scored`, the first run took 36.2 s dense and 15.4 s packed. The packed build step took 0.05 s, and the packed warm median was 0.312 s.
+
+Remember the solver default when you run the harness. Check mode uses `run_build_step()`'s own default unless you pass `--signal-solver`. On these branches that default is dense.

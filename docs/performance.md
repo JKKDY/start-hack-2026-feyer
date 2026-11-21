@@ -106,6 +106,16 @@ Warm repeats ranged from 10.4 to 24.2 s. The branch kept dense solves and was no
 
 The flag mainly shortens gradient compilation. After the fixed parameters were folded in, its gain is 0.3 s, which is within run-to-run noise. Warm time is unchanged. The flag is not adopted: the scored run uses the original `benchmark.py`, so it would have to be set inside `differometor/`. The organisers have not said whether that is allowed. `71b231d` itself is not part of `baseline-optimized`.
 
+### Ahead-of-time compilation feasibility
+
+The `baseline-optimized` build spends 8.78 s tracing and compiling in its recorded 12.09 s first run, with a 0.307 s warm median. A separate application runner could compile a complete simulation and gradient for a given setup ahead of time. Python would still build the setup. The executable would take design values as inputs and be keyed by the topology, input shapes and dtypes, any embedded fixed parameters, JAX versions, and CPU target. JAX's experimental executable serialization loads machine code. StableHLO export still needs compilation on the target. [JAX serialization documentation](https://docs.jax.dev/en/latest/501/export.html#serializing-compiled-executables)
+
+A two-process probe on the i7-11370H laptop used one process at a time on native Windows with Python 3.12 and JAX/JAXLIB 0.9.0. A small double-precision `value_and_grad` program compiled and serialized in the first process, then returned the expected value and gradient for a different input after reload in the second process. The CPU loader emitted target-feature warnings about `prefer-no-scatter` and `prefer-no-gather`; the calculation still passed. A small `pure_callback` program executed successfully but failed serialization because its Python callback wrapper could not be pickled. These were feasibility probes. The full simulator and a native FFI call have yet to be tested for executable reload.
+
+The packed solver already factors matrices in native SuperLU through a Python callback. A narrow C++ FFI wrapper could remove that callback while retaining the existing implicit differentiation and fixed-precision refinement. Replacing the callback alone would leave the surrounding JAX graph to compile. The first native test should serialize a tiny FFI-backed value-and-gradient program and reload it after registering the same target in a fresh process. [JAX FFI documentation](https://docs.jax.dev/en/latest/ffi.html)
+
+The original scored harness has an explicit lower-and-compile step for each of its three stages and disables the persistent cache. A separate AOT runner would measure application startup under different conditions. Confirm with the organisers before counting offline compilation toward a scored speedup. For an unchanged-harness speedup, move a substantial part of the graph into a native operation that the existing JAX stages can call, or reduce the graph that XLA compiles.
+
 ## Benchmarking further changes
 
 Two tools cover a change:

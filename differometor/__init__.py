@@ -2,7 +2,7 @@ import os
 
 
 def _configure_xla():
-    """Compile the CPU programs with LLVM optimisation level 0.
+    """Use the low-latency CPU compiler settings tested with the pinned jaxlib.
 
     The simulator's compiled programs run for ~0.1 s but took seconds to compile, mostly
     inside LLVM's machine-code optimiser. At -O0 compilation is ~40 % faster while runtime
@@ -18,7 +18,10 @@ def _configure_xla():
         return
     flags = os.environ.get("XLA_FLAGS", "")
     if "--xla_backend_optimization_level" not in flags:
-        os.environ["XLA_FLAGS"] = f"{flags} --xla_backend_optimization_level=0".strip()
+        flags += " --xla_backend_optimization_level=0"
+    if "--xla_cpu_use_fusion_emitters" not in flags:
+        flags += " --xla_cpu_use_fusion_emitters=false"
+    os.environ["XLA_FLAGS"] = flags.strip()
 
 
 _configure_xla()

@@ -120,6 +120,28 @@ These times come from **a different machine** from the tables above: Intel Core 
 
 Forward compilation fell from 3.26 s to 1.82 s and gradient compilation from 1.47 s to 0.78 s. Every run passed, with a maximum log-sensitivity error of 5.37e-6 and the gradient spot check passing. The gain carries over: on the same machine, every harness setup's per-case first run was 1.9–2.4 s faster with the flag (1.1 s for `cavity_tuning`), with unchanged errors. Warm time rose by about 0.01 s.
 
+## Batched component evaluation and shorter CPU compilation
+
+On the branch based on `a017042`, component functions read parameter columns on demand and evaluate an entire group in one call. Empty sweeps and absent links bypass their indexed updates. Setup initializes matrix diagonals in place and passes the allocated matrices directly to the packing step. The CPU compiler uses `--xla_cpu_use_fusion_emitters=false` alongside LLVM level 0. Explicit user settings retain precedence.
+
+Apple M1, 16 GiB, eight logical CPUs available, macOS 26.5.2, Python 3.12.16, JAX and jaxlib 0.9.0. Each variant ran in five interleaved fresh processes, unpinned, with ten warm evaluations each. Times are medians in seconds.
+
+| macOS build | First run | Trace/lower/compile | Optical build | Warm |
+| --- | ---: | ---: | ---: | ---: |
+| Control at `a017042` | 1.990 | 1.358 | 0.050 | 0.171 |
+| Batched components and compiler change | 1.549 | 0.978 | 0.045 | 0.180 |
+
+One-process screening runs on the revised solver gave the following first-run, compile and warm times in seconds. Existing LLVM settings alone gave 1.726 / 1.171 / 0.169. Disabling the fusion emitters gave 1.526 / 0.961 / 0.174 and was retained for the repeated comparison. Single-module code generation gave 1.738 / 1.175 / 0.172, disabling constant folding gave 1.755 / 1.193 / 0.169, and disabling expensive LLVM passes gave 1.717 / 1.168 / 0.173. Those three settings were dropped.
+
+Linux ARM64 under Docker Desktop on the same M1, with one logical CPU selected by the original benchmark. One fresh process per version and ten warm evaluations. These times include the VM and filesystem overhead.
+
+| Linux build | First run | Trace/lower/compile | Optical build | Warm |
+| --- | ---: | ---: | ---: | ---: |
+| Control at `a017042` | 3.938 | 3.188 | 0.064 | 0.293 |
+| Batched components and compiler change | 2.454 | 1.617 | 0.061 | 0.300 |
+
+The unchanged benchmark passed on both platforms for the full 101-frequency, 193-variable workload. The macOS generality harness passed all 13 cases, including the nominal and four fuzzed parameter sets. Maximum sensitivity and gradient errors excluding Voyager FM were 1.34e-7 and 5.03e-8. On the ill-conditioned Voyager FM case they were 0.0667 and 0.00146, within the reference tolerance. The sparse solver unit test passed.
+
 ## Benchmarking further changes
 
 Two tools cover a change:

@@ -80,31 +80,23 @@ class _Columns:
     """Lets a component function index its inputs (`parameters[i]`) when the columns
     are a mix of NumPy constants and traced arrays (no stacking, so constness survives)."""
 
-    __slots__ = ("columns",)
-
-    def __init__(self, columns):
-        self.columns = columns
+    def __init__(self, parameters, inputs, constants):
+        self.parameters = parameters
+        self.inputs = inputs
+        self.constants = constants
+        self.columns = {}
 
     def __getitem__(self, index):
+        if index not in self.columns:
+            indices = self.inputs[:, index]
+            if self.constants.dynamic[indices].any():
+                self.columns[index] = self.parameters[indices]
+            else:
+                self.columns[index] = self.constants.values[0, indices]
         return self.columns[index]
 
     def __len__(self):
-        return len(self.columns)
-
-
-def _group_inputs(parameters, inputs, constants):
-    """Input columns for one function group: a column whose entries all refer to fixed
-    parameters becomes a NumPy constant (XLA folds everything computed from it, and AD
-    emits no derivative code or residuals for it); other columns are gathered from the
-    traced parameter row as before."""
-    columns = []
-    for column in range(inputs.shape[1]):
-        indices = inputs[:, column]
-        if constants.dynamic[indices].any():
-            columns.append(parameters[indices])
-        else:
-            columns.append(constants.values[0, indices])
-    return columns
+        return self.inputs.shape[1]
 
 
 def component_coefficients(parameters, function_input_indices, output_indices, function_indices, constants=None):
@@ -116,10 +108,14 @@ def component_coefficients(parameters, function_input_indices, output_indices, f
                 continue
             inputs, rows, columns = group
             if constants is not None and isinstance(inputs, np.ndarray):
-                values = vmap(lambda *cols, f=function: f(_Columns(cols)))(*_group_inputs(parameters, inputs, constants))
+                values = function(_Columns(parameters, inputs, constants))
+                if values.ndim == 1:
+                    coefficients.append(values[columns])
+                else:
+                    coefficients.append(values[columns, rows])
             else:
                 values = vmap(function)(parameters[inputs])
-            coefficients.append(values[rows, columns])
+                coefficients.append(values[rows, columns])
         return jnp.concatenate(coefficients)[output_indices]
 
     function_inputs = parameters[function_input_indices]
@@ -212,7 +208,11 @@ def expand_parameters(array: jnp.ndarray, indices: jnp.ndarray, values: jnp.ndar
     This implementation uses indexed updates that remain compatible with JAX
     transformations and compilation.
     """
+    if not indices.size and values.shape[1] == 1:
+        return array
     tiled_array = jnp.tile(array, (values.shape[1], 1))
+    if not indices.size:
+        return tiled_array
     row_indices = jnp.repeat(jnp.arange(values.shape[1]), len(indices))
     column_indices = jnp.tile(indices, values.shape[1])
     flat_values = values.T.flatten()
@@ -389,11 +389,12 @@ def simulate(
     )
 
     # Apply parameter linking (derived parameters).
-    inputs_to_link = parameters[0, linked_indices]
-    outputs_to_link = vmap(lambda i, x: lax.switch(i, LINKING_FUNCTIONS, x))(
-        linking_function_indices, inputs_to_link
-    )
-    parameters = parameters.at[[0], indices_to_link].set(outputs_to_link)
+    if indices_to_link.size:
+        inputs_to_link = parameters[0, linked_indices]
+        outputs_to_link = vmap(lambda i, x: lax.switch(i, LINKING_FUNCTIONS, x))(
+            linking_function_indices, inputs_to_link
+        )
+        parameters = parameters.at[[0], indices_to_link].set(outputs_to_link)
 
     # Quadrature-homodyne-detector phase factors (unit magnitude complex phase).
     qhd_phase_values = jnp.exp(1j * jnp.radians(parameters[0, qhd_parameter_indices]))
@@ -642,11 +643,11 @@ def run_build_step(
     # Integer/bool index arrays become compile-time constants (see differometor/static.py).
     # The build works in NumPy; remaining float/complex data is handed to JAX here with a plain
     # device transfer (no compilation), so eager callers of simulate() still get JAX arrays.
-    simulation_arrays = jax.tree_util.tree_map(_to_jax_data, make_static(simulation_arrays))
     # The base parameter row is fixed by the setup (optimised/swept/linked entries are overwritten
     # inside simulate). Making it static lets simulate() fold everything that depends only on
     # fixed parameters at compile time. Changing it forces a recompile, never a stale result.
-    simulation_arrays["parameters"] = StaticArray(np.asarray(simulation_arrays["parameters"]))
+    simulation_arrays["parameters"] = StaticArray(simulation_arrays["parameters"])
+    simulation_arrays = jax.tree_util.tree_map(_to_jax_data, make_static(simulation_arrays))
     metadata = tuple(_to_jax_data(value) for value in metadata)  # port indices; port_to_index dict passes through
 
     if timeit:

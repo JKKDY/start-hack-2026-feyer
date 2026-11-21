@@ -1,4 +1,6 @@
 Start with docs/README.md and read the relevant documentation before making changes.
+CLAUDE.md holds background for every agent, despite its name: the goal and scoring, the
+correctness rules, the physics, and the original optimization hypotheses.
 
 Record new findings in the existing document for that topic. Consolidate overlapping
 material, correct stale claims, and add evidence or context where it helps. Create

@@ -75,14 +75,17 @@ The experimental CPU path uses one SuperLU factorization per frequency to solve 
 
 In a fresh cold rerun, the dense reference took 42.99 s including JIT and the fully packed mode took 18.05 s.
 
-All three experimental modes passed the standard reference sensitivity and finite-difference gradient checks on 101 frequencies. The fully packed result matched all 193 gradient coordinates within the experiment tolerance at the saved and perturbed points, with relative L2 differences of 1.74×10⁻⁸ and 2.53×10⁻⁷ against the dense control. Its largest per-frequency relative L2 signal-field error was 2.04×10⁻⁷. Individual signal entries still failed the earlier strict elementwise comparison, including entries close to zero relative to their field vectors. The dense solver remains the default.
+All three sparse modes passed the standard reference sensitivity and finite-difference gradient checks on 101 frequencies. The fully packed result matched all 193 gradient coordinates within the experiment tolerance at the saved and perturbed points, with relative L2 differences of 1.74×10⁻⁸ and 2.53×10⁻⁷ against the dense control. Its largest per-frequency relative L2 signal-field error was 2.04×10⁻⁷. Individual signal entries still failed the earlier strict elementwise comparison, including entries close to zero relative to their field vectors.
 
 On the 21-frequency grid, the new code's default dense path reproduced the previous physical outputs and loss bit for bit. Its maximum absolute gradient difference was 6.90×10⁻⁹.
 
-On Linux or WSL, reproduce the fully packed CPU run with:
+The fully packed build is the benchmark default. Its acceptance covers the fixed benchmark workload, the supplied checks, and the tested full-gradient comparisons. The library's `run_build_step()` still defaults to dense and accepts `signal_solver="packed", pack_noise=True` for callers that opt in. The mixed-precision refinement below remains a diagnostic.
+
+On Linux or WSL, compare the default build with the dense reference:
 
 ```bash
-python benchmark.py --cpus 1 --repeats 3 --signal-solver packed --pack-noise --output benchmark-packed.json --save-arrays packed.npz
+python benchmark.py --cpus 1 --repeats 3 --output benchmark-packed.json --save-arrays packed.npz
+python benchmark.py --cpus 1 --repeats 3 --signal-solver dense --output benchmark-dense.json --save-arrays dense.npz
 ```
 
 ### Signal-field stability

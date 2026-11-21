@@ -142,10 +142,13 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("benchmark.json"), help="JSON report (.json)")
     parser.add_argument("--plot", type=Path, help="Timing plot (.png, .svg or .pdf); defaults to the JSON filename with .png suffix")
     parser.add_argument("--save-arrays", type=Path, help="Save physical outputs, sensitivity, powers, parameters and gradient (.npz)")
-    parser.add_argument("--signal-solver", choices=("dense", "sparse", "packed"), default="dense",
-                        help="Select the dense reference solver or an experimental CPU sparse solver")
-    parser.add_argument("--pack-noise", action="store_true", help="Evaluate the noise covariance at occupied entries")
+    parser.add_argument("--signal-solver", choices=("dense", "sparse", "packed"), default="packed",
+                        help="Select a CPU signal solver (default: packed)")
+    parser.add_argument("--pack-noise", action=argparse.BooleanOptionalAction, default=None,
+                        help="Evaluate noise at occupied covariance entries (default: on with packed signal)")
     args = parser.parse_args()
+    if args.pack_noise is None:
+        args.pack_noise = args.signal_solver == "packed"
     if args.repeats < 3:
         parser.error("Use at least three timed repetitions.")
     plot_path = output_paths(args, parser)

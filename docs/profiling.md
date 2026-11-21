@@ -56,6 +56,24 @@ The split structure costs about 2 s more compile and **about 6 s more execution*
 to *export* every AD residual as an output (9.6 GB written to memory). We can't change `benchmark.py`,
 but a `custom_vjp` lets us choose what the residuals are (see H3).
 
+### Confirmation on the i7-11370H laptop
+
+The original dense simulator was profiled on 21 November 2026 on the native Windows laptop used in [Performance experiments](performance.md). It ran pinned to one CPU, with each stage compiled separately. Its baseline run took 95.27 s first run.
+
+| Stage | Compile (s) | Warm execution (s) |
+| --- | ---: | ---: |
+| Carrier parameter and matrix assembly | 2.84 | 0.001 |
+| Signal matrix assembly | 4.94 | 1.02–1.10 |
+| Signal solve | 0.40 | 2.68–2.84 |
+| Noise detector weights and adjoint matrix | 0.15 | 0.53–0.58 |
+| Noise adjoint solve | 0.32 | 2.68–2.90 |
+| Noise covariance assembly and multiplication | 3.28 | 0.84–1.02 |
+| Noise propagation solve and variance reduction | 0.47 | 2.77–2.92 |
+
+The three dense solves took about 8.5 s of the roughly 10.9 s warm forward pass. Because each stage was compiled on its own, XLA could not share the factorization between the signal solve and the noise propagation solve here. In the full program, XLA shares that LU (H2).
+
+The residual cost (H3) was measured separately. A forward-only program compiled in 11.56 s and ran in 6.9–8.5 s warm. The same forward pass exporting its autodiff residuals compiled in 20.97 s, wrote 9.59 GB of residual outputs, and ran in 24.8–33.2 s.
+
 ## 2. Hypotheses
 
 ### H1 — `vmap(lax.switch)` bloats compile: **CONFIRMED, but only together with static indices**

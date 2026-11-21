@@ -2,12 +2,23 @@
 
 `benchmark.py` checks only the scored fixture at its saved parameters, against one public sensitivity curve. [`tests/check_general.py`](../tests/check_general.py) is broader. It compares every physical output and the gradient against references computed by the **unmodified simulator**. It does this at each setup's saved parameters and at seeded **fuzzed** parameter sets. It also records first-run and warm timings for each case, so every run doubles as a benchmark against the reference code.
 
+## Verifying a change
+
+The references are committed in `tests/reference/`, so a fresh checkout can verify a change at once. Nobody needs to run the slow original simulator again.
+
+1. Run `python tests/check_general.py --suite all`. Add `--signal-solver packed` if the change affects that path on a branch where `run_build_step` defaults to `dense`.
+2. Require `ALL PASS`. A failure prints the case, the point (0 is nominal, 1–4 are fuzzed), the quantity, its error and its tolerance. The JSON report has every value.
+3. For speed, compare the report's `first_run_total` and `warm_median` with an earlier report from the same machine. The stored reference timings come from the laptop described below. The printed speedups are exact only there.
+4. Also run `python benchmark.py --cpus 1` for the official check and scored time.
+
+Run `--save` again only when the cases, the fuzz rules (`FUZZ_VERSION`), the sample settings or the reference ref change. Then commit the new `tests/reference/` with that change.
+
 ## Commands
 
 The Windows experiments used the Python 3.12 environment in `.venv/benchmark-local/windows-env`. On Linux or WSL, use the environment from the [challenge README](../README.md).
 
 ```bash
-python tests/check_general.py --save                   # once per machine: references from git ref `main`
+python tests/check_general.py --save                   # regenerate references from git ref `main` (already committed)
 python tests/check_general.py                          # scored fixture only (default suite)
 python tests/check_general.py --suite all              # all 13 setups
 python tests/check_general.py --cases aligo_am,uifo3_finesse
@@ -88,8 +99,8 @@ The loss is `mean(log10(sensitivity))` when the case has a signal detector and a
 
 | Path | Content |
 | --- | --- |
-| `tests/reference/<case>.npz` | `parameters` (points × P) and the stacked outputs for every point. Git-ignored. |
-| `tests/reference/meta.json` | Reference commit, fuzz settings, per-point floors, and per-case reference timings. Git-ignored. |
+| `tests/reference/<case>.npz` | `parameters` (points × P) and the stacked outputs for every point. Committed. |
+| `tests/reference/meta.json` | Reference commit, fuzz settings, per-point floors, and per-case reference timings. Committed. |
 | `tests/.tmp/` | Exported reference simulators and worker scratch files. Git-ignored. |
 | `--output` JSON | Per case: pass or fail, failures, worst error per quantity, every point's error, tolerance and flag, timings, reference timings, and speedups. Also the working-tree commit, branch, whether `differometor/` was dirty, and the reference settings. |
 

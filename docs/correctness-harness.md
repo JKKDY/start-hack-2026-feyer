@@ -159,3 +159,9 @@ The build step now runs in NumPy, and this commit merges the harness into the br
 These runs were made before `run_build_step()`'s default changed to packed and the original `benchmark.py` was restored. Since then, a plain check run tests the packed path, the same path the original benchmark scores.
 
 After that change, a plain `--suite all` run passed all 13 cases with the same errors as the packed runs above. For `uifo3_scored`, the first run took 15.1 s and the warm median was 0.304 s. The original `benchmark.py` printed `PASS` with 3 repeats. It ran from a checkout with LF line endings and was pinned to one CPU by an external wrapper. Its complete first-run total was 15.43 s and its warm median 0.296 s.
+
+## Results on `chris/static-params` with the harness merged (`6e66e96`)
+
+`67ceed2` folds the fixed setup parameters into the compiled program. Merging `chris/numpy-build` brought in the harness, the references, the original `benchmark.py` and the packed default. A plain run, which tests the packed default, passed all 13 cases with the same errors as the packed runs above. The 4 UIFO cases and the 9 remaining cases ran as two invocations, after an interrupted dense run was dropped. For `uifo3_scored` the harness first run took 13.1 s, 8.2× faster than the reference, and the warm median was 0.336 s.
+
+The original `benchmark.py` printed `PASS` with 3 repeats, from an LF-ending checkout, pinned to one CPU. Its complete first-run total was 12.09 s: forward compile 4.74 s, gradient compile 2.63 s. Its warm median was 0.307 s. Before the merge, the branch's modified `benchmark.py` measured 12.05 s, or 11.74 s with `--xla_backend_optimization_level=1`. That flag's 0.3 s gain is within run-to-run noise.

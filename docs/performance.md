@@ -120,6 +120,21 @@ The packed solver already factors matrices in native SuperLU through a Python ca
 
 A small assembly spike exercised that runtime-size boundary with the actual cavity and scored UIFO builder plans. A single C shared library built with GCC 15.2 under Ubuntu 26.04 WSL was loaded from Python through `ctypes`. It accepted 66 and 3,348 coefficient slots using the same binary, with zero and one noise detector in the respective setups. Five synthetic complex inputs per geometry checked the packed assembly and its two input cotangents against JAX, with a maximum absolute component error of 1.78×10⁻¹⁵. The available WSL Python lacked Cython and development headers, so this tested the native boundary directly. It did not replace a simulator stage or measure a scored speedup. The next compile-time experiment should profile component evaluation together with its derivatives before choosing a larger block to move.
 
+#### Integrated Cython assembly spike
+
+An isolated candidate at `01a5d4b` replaced the packed signal scatter, carrier coupling and conjugation with one Cython extension. Its reverse-mode rule calls a precompiled Cython backward kernel. The same module handled all topology sizes in the suite. Component evaluation, solves, and the surrounding JAX programs were unchanged. The candidate still uses host callbacks, and the full simulation still compiles.
+
+| Version | First run incl. JIT (s) | JIT (s) | Warm (s) |
+| --- | ---: | ---: | ---: |
+| Current packed control | 10.95 | 7.86 | 0.293 |
+| Cython assembly and backward pass | 10.10 | 7.40 | 0.281 |
+
+Each cell is the median of three fresh runs with three warm evaluations each, using the original `benchmark.py` on the same i7-11370H with one pinned logical CPU, 15.8 GiB RAM, native Windows 10, Python 3.12.10 and JAX/JAXLIB 0.9.0. The extension was built beforehand with Cython 3.1.8 and MSVC 14.43. The candidate's first runs ranged from 10.06 to 10.24 s, versus 10.61 to 11.55 s for the control. The measurements show a modest cold-start gain and similar warm execution on this workload.
+
+All scored runs passed. The candidate's maximum scored log-sensitivity error was 5.37×10⁻⁶. Its nominal gradient differed from the current packed control by 1.97×10⁻⁹ in relative L2. The correctness harness passed all 13 setups and their fuzzed points against the committed references. Its largest sensitivity and gradient errors were 6.75×10⁻² and 1.22×10⁻³ in the known near-null `voyager_fm` case, both within that case's stored round-off tolerances.
+
+Keep this as an isolated experiment. It removes compilation for one part of the graph while leaving about 7.4 s of JIT. The bridge implements reverse-mode differentiation and would need a forward-mode rule before serving as a general replacement. To reproduce it, install Cython, setuptools and a C compiler in the benchmark environment, then prepare an unused directory with `python profiling/cython_assembly/prepare.py <new-directory> --ref 01a5d4b`. Run the original benchmark and correctness harness from that directory. [Reproduction helper](../profiling/cython_assembly/prepare.py)
+
 The original scored harness has an explicit lower-and-compile step for each of its three stages and disables the persistent cache. A separate AOT runner would measure application startup under different conditions. Confirm with the organisers before counting offline compilation toward a scored speedup. For an unchanged-harness speedup, move a substantial part of the graph into a native operation that the existing JAX stages can call, or reduce the graph that XLA compiles.
 
 ## Benchmarking further changes

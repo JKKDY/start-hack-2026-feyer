@@ -138,30 +138,6 @@ What the floors show:
 - **Power floors reach 4.4e-4 on the trained UIFOs**, so the powers comparison on those cases is mostly under the loose gate.
 - Reference first-run times include each worker's JAX import, about 2.5 s on this machine.
 
-## Results on `chris/static-indices` (`31e6aac`)
+## Results
 
-Both runs used the references above, on the same machine. On this branch `run_build_step` still defaults to `signal_solver="dense"`. The default run therefore tests static indices with the dense solver. `--signal-solver packed` tests the sparse SuperLU path with iterative refinement.
-
-| Case | Dense: first run (s), speedup | Dense: warm (s) | Packed: first run (s), speedup | Packed: warm (s), speedup | Packed: max sensitivity error | Packed: max gradient error |
-| --- | --- | ---: | --- | --- | ---: | ---: |
-| `uifo3_scored` | 49.2, 2.2× | 19.292 | 16.9, 6.3× | 0.304, 93× | 8.5e-8 | 6.2e-9 |
-| `uifo3_jitter` | 20.3, 1.6× | 4.239 | 14.8, 2.2× | 0.118, 44× | 5.9e-8 | 8.4e-9 |
-| `uifo3_finesse` | 16.9, 2.0× | 2.736 | 14.1, 2.4× | 0.080, 39× | 4.9e-8 | 4.0e-9 |
-| `uifo3_20_5000` | 22.0, 1.5× | 3.845 | 15.0, 2.2× | 0.094, 43× | 2.1e-9 | 1.3e-9 |
-| other 9 cases | 9.3–17.0, 1.4–2.8× | 0.006–0.376 | 8.0–16.0, 1.6–3.2× | 0.015–0.053 | ≤ 1.4e-7, except `voyager_fm` | ≤ 4.9e-8, except `voyager_fm` |
-
-All 13 cases passed in both modes. The dense path reproduced the reference carrier, signal and powers bit for bit. The packed path's largest errors were on `voyager_fm`: 6.7e-2 in sensitivity and 1.2e-3 in gradient. Both are within that case's loose gate, set by floors of 2.7 and 0.90. `cavity_tuning` warm time was slower with packed (0.015 s against 0.009 s) because it has no noise detector and almost no signal system to solve.
-
-## Results on `chris/numpy-build` (`b5fbf90`)
-
-The build step now runs in NumPy, and this commit merges the harness into the branch. All 13 cases passed in both modes, with the same errors as on `chris/static-indices`. For `uifo3_scored`, the first run took 36.2 s dense and 15.4 s packed. The packed build step took 0.05 s, and the packed warm median was 0.312 s.
-
-These runs were made before `run_build_step()`'s default changed to packed and the original `benchmark.py` was restored. Since then, a plain check run tests the packed path, the same path the original benchmark scores.
-
-After that change, a plain `--suite all` run passed all 13 cases with the same errors as the packed runs above. For `uifo3_scored`, the first run took 15.1 s and the warm median was 0.304 s. The original `benchmark.py` printed `PASS` with 3 repeats. It ran from a checkout with LF line endings and was pinned to one CPU by an external wrapper. Its complete first-run total was 15.43 s and its warm median 0.296 s.
-
-## Results on `chris/static-params` with the harness merged (`6e66e96`)
-
-`67ceed2` folds the fixed setup parameters into the compiled program. Merging `chris/numpy-build` brought in the harness, the references, the original `benchmark.py` and the packed default. A plain run, which tests the packed default, passed all 13 cases with the same errors as the packed runs above. The 4 UIFO cases and the 9 remaining cases ran as two invocations, after an interrupted dense run was dropped. For `uifo3_scored` the harness first run took 13.1 s, 8.2× faster than the reference, and the warm median was 0.336 s.
-
-The original `benchmark.py` printed `PASS` with 3 repeats, from an LF-ending checkout, pinned to one CPU. Its complete first-run total was 12.09 s: forward compile 4.74 s, gradient compile 2.63 s. Its warm median was 0.307 s. Before the merge, the branch's modified `benchmark.py` measured 12.05 s, or 11.74 s with `--xla_backend_optimization_level=1`. That flag's 0.3 s gain is within run-to-run noise.
+Results for each build, with benchmark times, are in [Performance experiments](performance.md#correctness-harness-results). Record new harness results there.

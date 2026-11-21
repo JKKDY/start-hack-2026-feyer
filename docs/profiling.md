@@ -1,8 +1,8 @@
-# Profiling findings — 2026-11-21 (branch `chris/profiling`)
+# Profiling findings
 
-Machine: Intel Core Ultra 7 255H laptop, WSL2, pinned to 1 logical CPU (same as the benchmark).
-Nothing in `differometor/` has been changed. All prototypes are monkeypatched from outside the package.
-Raw outputs: `runs/prof_compile.txt`, `runs/prof_solve.txt`, `runs/prof_structure.txt`, `runs/prof_schur.txt`.
+This profile of the original simulator was taken on 21 November 2026 on branch `chris/profiling`. It guided the optimizations recorded in [Performance experiments](performance.md). Each hypothesis below notes what was done with it.
+
+Machine: Intel Core Ultra 7 255H laptop, WSL2, pinned to 1 logical CPU, the same as the benchmark. This is a different machine from the one in the performance tables, so the absolute times here are not comparable with those. The prototypes patched the unmodified package from outside. The scripts are in `profiling/`. Their raw outputs went to `runs/`, which was not committed.
 
 ## 1. Baseline: local vs official
 
@@ -56,13 +56,11 @@ The split structure costs about 2 s more compile and **about 6 s more execution*
 to *export* every AD residual as an output (9.6 GB written to memory). We can't change `benchmark.py`,
 but a `custom_vjp` lets us choose what the residuals are (see H3).
 
-## 2. Generality harness (plan step 0b) — `tests/check_general.py`
-
-Moved to [docs/correctness-harness.md](../docs/correctness-harness.md). That document now covers the case list, the tolerance rule and its calibration, fuzzed parameter sets, timings, references generated from `main`, and results for this branch. The earlier single-point floors agree with the new nominal floors. For example, `uifo3_finesse` has a sensitivity floor of 6.6e-7 and `voyager_fm` 2.7.
-
-## 3. Hypotheses
+## 2. Hypotheses
 
 ### H1 — `vmap(lax.switch)` bloats compile: **CONFIRMED, but only together with static indices**
+
+**Outcome:** implemented as grouped component evaluation (`3e030f4`) and static index arrays (`859f7aa`).
 
 `vmap(switch)` with a batched index is lowered to *evaluate all 19 branches + `select`*. Only 3/19
 (carrier), 11/19 (signal) and 3/19 (noise) functions are actually used:
@@ -100,6 +98,8 @@ registered pytree node whose aux_data (hashable: dtype + shape + bytes) carries 
 
 ### H2 — signal matrix factorised 3× per frequency: **PARTLY CONFIRMED (2×, not 3×)**
 
+**Outcome:** superseded by the sparse solver. One SuperLU factorization per frequency serves both the signal solve and the detector adjoint solve (`5191d2f`).
+
 Isolated, batched 101 × n×n complex128, 1 CPU (`prof_solve.py`):
 
 | n | 1× `solve` | current pattern (solve M, solve Mᴴ, solve M) | `lu_factor` + 3× `lu_solve` |
@@ -114,6 +114,8 @@ execution**, agrees to 5e-16, and compiles no slower. Dense LU runs at about **3
 peak, so there is no kernel speed left to find. Only reducing n (H4) or the number of factorisations helps.
 
 ### H3 — default AD through the solves is wasteful: **STRONGLY CONFIRMED**
+
+**Outcome:** implemented with `jax.lax.custom_linear_solve` around the sparse solve. JAX then differentiates the linear systems implicitly instead of through the factorization (`5191d2f`). Packed assembly removed the dense batched matrices; the memory figures are in [Structural solver experiments](performance.md#structural-solver-experiments).
 
 The forward pullback carries **817 residual arrays totalling 9.6 GB**: at least 6 batched 101×751×751
 complex128 copies of about 0.91 GB each (matrices, LU factors, conjugate-transposed copies). Peak RSS is 15 GB.
@@ -132,6 +134,8 @@ This is the discrete adjoint you know from CFD shape optimisation: one extra *tr
 *same* operator, rather than differentiating through the factorisation algorithm.
 
 ### H4 — exploit sparsity / static condensation: **PREMISE WRONG, IDEA STILL PROMISING**
+
+**Outcome:** sparsity is exploited with a pivoted sparse LU (SciPy SuperLU through `jax.pure_callback`) on the full pattern, not with an unpivoted static condensation. The conditioning risk described here turned out to be real; iterative refinement after every solve addresses it (`31e6aac`). See [Signal-field stability](performance.md#signal-field-stability).
 
 Sparsity: signal matrix 751×751 has **2 553 nonzeros (0.45 %)**, carrier 680 (0.83 %), noise 272.
 The rows are *not* what the brief assumed. Spaces are already folded into the component rows by
@@ -165,37 +169,15 @@ time. The open question is whether the static pivot order is stable, as it is fo
 FV matrices but not for general indefinite ones.
 
 ### H5 — lazy plotly import: **REJECTED as a meaningful lever** (about 30 ms locally)
+
+**Outcome:** done anyway, since it costs nothing (`bfd1ad2`).
 Free to do, but it won't move the score. See the import note in §1.
 
-## 4. Where the time would go after H1 + H2 + H3 (rough estimate, local)
+## 3. Outcome
 
-| Phase | now | after H1+H2+H3 (est.) |
-|---|---:|---:|
-| imports + build | 0.9 | 0.9 |
-| forward lower + compile | 11.2 | ~3 (static fwd-only: 0.46 + 2.6) |
-| forward execute | 15.6 | ~5 (7.3 fwd-only − 2.5 LU reuse) |
-| sensitivity | 0.3 | 0.3 |
-| gradient lower + compile | 3.8 | ~1–2 |
-| gradient execute | 3.7 | ~1 (2 triangular-solve sets + entry-function VJPs) |
-| **total** | **35.6** | **~11–13** |
+Before any change, the estimate for H1 + H2 + H3 was about 11–13 s first run on the profiling laptop, falling to about 8 s with H4. The implemented build differs from the plan: sparse LU replaced the dense LU reuse and the condensation. It also added a NumPy build step and folded the fixed setup parameters into the compiled program. That build reaches about 12 s with the original `benchmark.py`, measured on the i7-11370H laptop in [Performance experiments](performance.md#accepted-optimization-history). Compile time, 8.8 s of that total, remains the largest phase.
 
-After that, the remaining forward time is about 3 s of dense LU at n=751. H4 (n → ~264) would cut it to about
-0.3 s, which suggests about 8 s total. These are estimates: measure each step.
-
-## 5. Recommendation (order)
-
-1. **H1: static index pytree + per-function grouping.** Smallest, mechanical, already prototyped
-   (`grouped_update` in `profiling/prof_compile.py`), bit-identical, **−7 s compile locally (≈ −10 s on the
-   Xeon)**. Also removes the NaN-in-discarded-branch hazard.
-2. **H3 + H2 together: `custom_vjp` around the solve core with one LU per frequency reused for the signal solve,
-   the Mᴴ noise-weight solve, the covariance solve *and* the backward pass.** This is the biggest lever: about −5 s forward
-   execute, −6 s forward compile, gradient execute 3.7 s → ~1 s, peak memory 15 → ~5 GB.
-   Validate with the harness (its gradients run through exactly this pullback path) and the benchmark FD check.
-3. **H4: structural condensation**, only after 1 + 2 are in. Start with the zero-fill rule (safe, 1.8×),
-   then try the fill-limited elimination and check stability on `uifo3_finesse` / `uifo3_20_5000`.
-4. Remaining: build step (0.7 s), lazy plotly import, and XLA flags after asking the organisers.
-
-## 6. Gotchas discovered along the way
+## 4. Gotchas discovered along the way
 - `differometor.simulate` (the attribute) is the **function**, not the module, because `__init__` re-exports it.
   To monkeypatch module globals use `sys.modules["differometor.simulate"]`.
 - JAX caches traces per function object: lowering the same `jit(f)` twice after monkeypatching a global
@@ -203,9 +185,9 @@ After that, the remaining forward time is about 3 s of dense LU at n=751. H4 (n 
 - Always pin to 1 CPU for timing (`taskset -c 0` or the benchmark's `--cpus 1`): unpinned numbers are
   meaningless here in both directions (parallel compile ↓, oversubscribed execution ↑↑).
 
-## 7. Questions for the Feyer team
+## 5. Questions for the Feyer team
 - Is setting `XLA_FLAGS` from inside `differometor/` allowed?
 - How different can the final setup be: new component types, other frequency counts, several detectors?
   (The harness already covers multiple detectors, qhd, AM/FM modulation, sweeps.)
-- Is calling SciPy (e.g. sparse LU via `pure_callback` + `custom_vjp`) acceptable, or must everything
-  be JAX ops? (Relevant only if a sparse direct solver beats dense LU on the condensed system.)
+- Is calling SciPy acceptable, or must everything be JAX ops? This is now relevant: the current build's
+  sparse LU calls SciPy SuperLU through `jax.pure_callback`.

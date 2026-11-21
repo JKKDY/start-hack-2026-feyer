@@ -1,6 +1,6 @@
 # Feyer "Faster Physics" — START Hack Munich 2026 — project brief
 
-Handoff from a planning session. Read this first; it holds the context, constraints, baseline numbers, hypotheses and plan. **Profiling was done on 2026-11-21 (branch `chris/profiling`); full results in `notes/profiling.md`. Hypothesis status is marked in §6.**
+Handoff from a planning session. Read this first; it holds the context, constraints, baseline numbers, hypotheses and plan. **Profiling was done on 2026-11-21 (branch `chris/profiling`); full results and what became of each hypothesis are in `docs/profiling.md`. The current state, measured times and the optimization history are in `docs/performance.md`, which supersedes the status notes and plan below.**
 
 ## 1. Goal and scoring
 
@@ -101,7 +101,7 @@ Distances are split into macroscopic length L (multiple of λ) + microscopic tun
 
 Output shapes: carrier (286, 1), signal (751, 101), noise (101,).
 
-## 6. Hypotheses (profiled 2026-11-21 — see `notes/profiling.md` for numbers)
+## 6. Hypotheses (profiled 2026-11-21 — see `docs/profiling.md` for numbers and outcomes)
 
 > **Status H1: CONFIRMED (needs static indices too).** Prototype (static int indices + per-function grouping, `profiling/prof_compile.py`) is bit-identical and cuts compile 16.1 → 8.9 s locally (fwd 10.8 → 5.9, grad 3.7 → 1.9). Static indices alone: only 16.1 → 14.8. Used functions: carrier 3/19, signal 11/19, noise 3/19. Exec unchanged.
 

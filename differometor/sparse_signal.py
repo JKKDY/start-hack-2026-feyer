@@ -71,6 +71,24 @@ def pack_signal_template(template, pattern, update_indices, coupling_indices, ca
     return PackedSignal(*(jnp.asarray(value) for value in (packed, update_slots, coupling_slots, conjugate)))
 
 
+# Fixed-precision iterative refinement steps applied after every sparse solve.
+#
+# Why: the solution vectors span ~36 orders of magnitude (optical fields vs. mechanical
+# unknowns). SuperLU is normwise accurate (~1e-14) but can get the *tiny* components
+# wrong by orders of magnitude, and the noise covariance weights some of those components
+# heavily. Measured on the Voyager setup: noise off by 4.8e-3 in ln (limit 1e-5) without
+# refinement, 3e-13 with it. Each step costs one sparse mat-vec plus one triangular solve
+# pair with the existing factors (no refactorisation).
+REFINEMENT_STEPS = 2
+
+
+def _refine(solve, apply, rhs, solution):
+    """x <- x + solve(b - A x), repeated REFINEMENT_STEPS times."""
+    for _ in range(REFINEMENT_STEPS):
+        solution = solution + solve(rhs - apply(solution))
+    return solution
+
+
 def _factor_and_solve(coefficients, rows, pointers, signal_rhs, detector_rhs, *, transpose):
     coefficients, rows, pointers, signal_rhs, detector_rhs = map(
         np.asarray, (coefficients, rows, pointers, signal_rhs, detector_rhs)
@@ -79,14 +97,26 @@ def _factor_and_solve(coefficients, rows, pointers, signal_rhs, detector_rhs, *,
     detectors = np.empty_like(detector_rhs)
     size = signal_rhs.shape[1]
     for frequency, entries in enumerate(coefficients):
-        factors = splu(csc_matrix((entries, rows, pointers), shape=(size, size)))
-        signal[frequency] = factors.solve(signal_rhs[frequency], trans="T" if transpose else "N")
+        matrix = csc_matrix((entries, rows, pointers), shape=(size, size))
+        factors = splu(matrix)
+        if transpose:      # A^T x = b
+            solve_signal = lambda b: factors.solve(b, trans="T")  # noqa: E731
+            apply_signal = matrix.T.__matmul__
+        else:              # A x = b
+            solve_signal = factors.solve
+            apply_signal = matrix.__matmul__
+        rhs = signal_rhs[frequency]
+        signal[frequency] = _refine(solve_signal, apply_signal, rhs, solve_signal(rhs))
         if detector_rhs.shape[-1]:
             rhs = detector_rhs[frequency]
             # The linear transpose of the detector's A^H system is conj(A).
-            detectors[frequency] = (
-                factors.solve(rhs.conj()).conj() if transpose else factors.solve(rhs, trans="H")
-            )
+            if transpose:  # conj(A) u = d
+                solve_detector = lambda b: factors.solve(b.conj()).conj()  # noqa: E731
+                apply_detector = matrix.conj().__matmul__
+            else:          # A^H u = d
+                solve_detector = lambda b: factors.solve(b, trans="H")  # noqa: E731
+                apply_detector = matrix.conj().T.__matmul__
+            detectors[frequency] = _refine(solve_detector, apply_detector, rhs, solve_detector(rhs))
     return signal, detectors
 
 

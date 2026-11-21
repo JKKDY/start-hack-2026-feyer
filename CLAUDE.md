@@ -48,7 +48,7 @@ Laptop with 32 GB RAM, Windows → **WSL2 Ubuntu 24.04** (ships Python 3.12).
 
 ### Workflow
 - **Always pin to 1 CPU when timing** (`--cpus 1`, or `taskset -c 0` + `OMP_NUM_THREADS=1`). Unpinned runs mislead in both directions: XLA compiles in parallel (start_here.py: 5.0 s unpinned vs 13.6 s pinned), and execution oversubscribes threads under WSL (200 s vs 9.8 s).
-- Generality harness: `python tests/check_general.py` (13 cases, ~4 min, compares against `tests/reference/` saved from the unmodified simulator; `--cases a,b` for a subset). Must print ALL PASS after every change. References are git-ignored; regenerate with `--save` from an unmodified checkout (commit c10e851).
+- Correctness harness: `python tests/check_general.py` (scored fixture) or `--suite all` (13 setups), each at its nominal point plus fuzzed parameter sets, compared against `tests/reference/`. Must print ALL PASS after every change. References from `main` are committed in `tests/reference/`; `--save` regenerates them only when the cases or fuzz settings change. See docs/correctness-harness.md.
 - Profiling scripts live in `profiling/` (`prof_compile.py <variant>`, `prof_solve.py`, `prof_structure.py`, `prof_schur.py`).
 - Work on a git branch (`git checkout -b fast`); commit each experiment separately.
 - Fast check: `python benchmark.py --cpus 1 --repeats 3 --output runs/<name>.json` (~2–3 min; full 10 repeats ≈ 5 min).

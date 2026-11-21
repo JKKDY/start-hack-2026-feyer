@@ -187,6 +187,30 @@ Linux ARM64 under Docker Desktop on the same M1, with one logical CPU selected b
 
 The unchanged benchmark passed on both platforms for the full 101-frequency, 193-variable workload. The macOS generality harness passed all 13 cases, including the nominal and four fuzzed parameter sets. Maximum sensitivity and gradient errors excluding Voyager FM were 1.34e-7 and 5.03e-8. On the ill-conditioned Voyager FM case they were 0.0667 and 0.00146, within the reference tolerance. The sparse solver unit test passed.
 
+## Optional Rust kernel for packed signal coefficients
+
+The “Accelerate packed signal coefficients with an optional Rust kernel” change builds on `1988487`. It generates complex-double coefficient functions from the existing optical equations and reuses frequency-independent intermediates within each sweep. A CPU XLA foreign-function call evaluates the coefficients and a second entry point computes their analytic reverse derivatives. The packed scatter, sparse solve, readout and objective still use the existing code. On an explicitly CPU-only run, dispatch goes directly to the selected implementation, avoiding tracing an unused backend branch.
+
+To reproduce on macOS or Linux, install the project dependencies, Cargo and a C++17 compiler, then run `python -m differometor.rust_kernel.build` once before starting the original benchmark. A fresh wheel includes the build sources. The simulator automatically uses a compatible local binary on CPU and falls back to JAX when one is absent. Set `DIFFEROMETOR_DISABLE_NATIVE=1` to reproduce the control. The native build took 7.669 s on macOS and 8.675 s on Linux, with a toolchain available. Include that cost if evaluating a fresh source build. Eligibility for a separate installation step in challenge scoring is unconfirmed.
+
+Each column below gives the median of five fresh processes with ten warm repeats per process, alternating control and candidate order. Both environments used an Apple M1 host with 16 GiB RAM and eight logical CPUs, Python 3.12.16, JAX and jaxlib 0.9.0, x64 enabled and the persistent compilation cache disabled. Native macOS 26.5.2 used default affinity. The ARM64 Linux Docker benchmark used one pinned logical CPU.
+
+| Seconds | macOS JAX | macOS Rust | Linux JAX | Linux Rust |
+| --- | ---: | ---: | ---: | ---: |
+| Complete first run | 1.6212 | 1.1195 | 1.9985 | 1.4686 |
+| Setup, including imports | 0.4198 | 0.3803 | 0.3231 | 0.3257 |
+| Simulator build (within setup) | 0.0442 | 0.0405 | 0.0465 | 0.0472 |
+| Trace, lower and compile | 0.9789 | 0.5610 | 1.3562 | 0.8344 |
+| Forward lower and compile | 0.6830 | 0.3846 | 0.8721 | 0.5446 |
+| Gradient lower and compile | 0.2739 | 0.1424 | 0.4385 | 0.2403 |
+| Warm total | 0.1751 | 0.1736 | 0.2992 | 0.2881 |
+| Warm forward | 0.0878 | 0.0873 | 0.1613 | 0.1530 |
+| Warm gradient | 0.0859 | 0.0864 | 0.1371 | 0.1328 |
+
+In the earlier one-CPU Linux screen, the JAX control took 2.012 s cold, 1.367 s compile, and 0.296 s warm (nine processes). Moving both passes to Rust gave 1.589 / 0.919 / 0.301 s (five processes), so we dropped the version that recomputed invariant terms at every frequency. Keeping JAX forward with Rust reverse gave 1.700 / 1.070 / 0.295 s (three processes). Hoisting invariant terms in both Rust passes gave 1.455 / 0.842 / 0.285 s (three processes). We kept that design and added JAX transformation support and backend dispatch. The table reports the final integrated measurements.
+
+The original benchmark passed in all twenty final processes. The full reference suite passed on both platforms, covering 13 setups at their saved values and four perturbations each. At the nominal scored point the relative L2 differences against the JAX control were 3.01e-11 for sensitivity and 5.57e-10 for the full gradient on macOS, and 3.12e-11 and 8.70e-10 on Linux. Carrier and power arrays agreed exactly. Against the committed reference across all five scored-case points, the largest sensitivity and gradient errors were 8.59e-8 and 6.25e-9 across the two platforms. The suite-wide maxima came from the existing ill-conditioned Voyager FM case under its relaxed tolerances. Sensitivity and gradient errors there were 0.0627 and 0.00146 on macOS, and 0.845 and 0.923 on Linux. The prior JAX Linux control also produced 0.846 and 0.925 on that case. The dedicated native test compares every registered coefficient function with JAX, including complex inputs, forward and reverse derivatives, second derivatives and batching.
+
 ## Benchmarking further changes
 
 Two tools cover a change:

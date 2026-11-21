@@ -29,6 +29,7 @@ from differometor.setups import Setup
 from differometor.build import build, pairs_to_arrays, prepare_arrays, LINKING_FUNCTIONS
 from differometor.components import FUNCTIONS, UNIT_VACUUM, H_PLANCK, F0
 from differometor.sparse_signal import built_signal_pattern, pack_noise_template, pack_signal_template, solve_signal_and_adjoint
+from differometor.rust_kernel import installed_kernel
 from differometor.static import StaticArray, make_static, unwrap_static
 
 
@@ -62,6 +63,9 @@ def solve(matrix: jnp.ndarray, right_hand_side: jnp.ndarray) -> jnp.ndarray:
     right_hand_side = right_hand_side.astype(jnp.complex128)
     matrix = matrix.astype(jnp.complex128)
     return jnp.linalg.solve(matrix, right_hand_side)
+
+
+_NATIVE_KERNEL = installed_kernel()
 
 
 class ConstantParameters(NamedTuple):
@@ -456,9 +460,28 @@ def simulate(
         signal_matrix = signal_matrix.at[lower_coupling].set(signal_matrix[lower_coupling].conj())
         signal_rhs = signal_matrix[:, :, -1]
     else:
-        updates = _sweep_coefficients(
-            parameters, signal_function_input_indices, signal_output_indices, signal_function_indices, constants, varying,
+        def reference_coefficients(x):
+            return _sweep_coefficients(x, signal_function_input_indices, signal_output_indices,
+                                       signal_function_indices, constants, varying)
+
+        native_supported = (
+            _NATIVE_KERNEL is not None and varying is not None and parameters.dtype == jnp.complex128
+            and isinstance(signal_function_indices, tuple)
+            and all(g is None or (isinstance(g[0], np.ndarray) and g[0].shape[1] == 7)
+                    for g in signal_function_indices)
         )
+        if native_supported:
+            from differometor.native_coefficients import evaluate
+            def native_coefficients(x):
+                return evaluate(x, signal_function_indices, signal_output_indices, varying, reference_coefficients)
+
+            if jax.config.jax_platforms == "cpu":
+                # A CPU-only process can skip tracing the alternative platform branch.
+                updates = native_coefficients(parameters)
+            else:
+                updates = lax.platform_dependent(parameters, cpu=native_coefficients, default=reference_coefficients)
+        else:
+            updates = reference_coefficients(parameters)
         coefficients = jnp.broadcast_to(packed_signal.template, (parameters.shape[0], packed_signal.template.size))
         coefficients = coefficients.at[:, packed_signal.update_slots].set(updates)
         coupling = (slice(None), packed_signal.coupling_slots)

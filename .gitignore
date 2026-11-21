@@ -23,3 +23,6 @@ dump/
 xla_dump*/
 tests/.tmp/
 runs/*.log
+
+# Host-specific optional CPU kernel
+differometor/rust_kernel/.native/

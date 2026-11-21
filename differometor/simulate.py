@@ -19,6 +19,7 @@ Conventions used throughout:
 
 import jax
 from time import time
+import os
 import jax.numpy as jnp
 import numpy as np
 from functools import partial
@@ -397,6 +398,34 @@ def simulate(
 
     # Quadrature-homodyne-detector phase factors (unit magnitude complex phase).
     qhd_phase_values = jnp.exp(1j * jnp.radians(parameters[0, qhd_parameter_indices]))
+
+    if (
+        os.environ.get("DIFFEROMETOR_NATIVE") == "1"
+        and packed_signal is not None and packed_noise is not None
+        and isinstance(packed_signal.update_slots, np.ndarray)
+        and isinstance(optimized_parameter_indices, np.ndarray)
+        and isinstance(indices_to_link, np.ndarray)
+        and isinstance(carrier_function_indices, tuple)
+        and parameters.dtype == jnp.complex128
+    ):
+        from differometor._native_simulate import Plan, run as run_native
+
+        active_parameters = np.zeros(parameters.shape[-1], dtype=bool)
+        active_parameters[optimized_parameter_indices] = True
+        active_parameters[indices_to_link] = True
+        plan = Plan(
+            active_parameters, carrier_changing_parameter_indices, signal_changing_parameter_indices,
+            (carrier_function_indices, carrier_output_indices),
+            (signal_function_indices, signal_output_indices),
+            (noise_function_indices, noise_output_indices),
+            carrier_matrix_indices, packed_signal.update_slots, packed_signal.coupling_slots,
+            signal_carrier_indices.flatten(), packed_signal.conjugate, packed_noise.update_slots,
+            packed_noise.rows, packed_noise.columns, signal_sparsity, qhd_placing_indices,
+        )
+        return run_native(
+            plan, parameters, qhd_phase_values, carrier_changing_values, signal_changing_values,
+            carrier_matrix, packed_signal.template, packed_noise.template, noise_selection_vectors,
+        )
 
     # --------------------
     # Carrier solve

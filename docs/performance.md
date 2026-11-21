@@ -176,6 +176,23 @@ The organisers clarified that implementation and build or packaging changes are 
 
 Evaluate both passes together. Time a fresh process over the same interval as `benchmark_slim.py`, including extension import and plan construction. Run the cavity and UIFO with the same build, verify the physical outputs, sensitivity and full gradient, and measure warm repeats against a paired baseline. The unchanged scored harness explicitly lowers and compiles three outer JAX wrappers with the persistent cache disabled. Measure it separately through the JAX adapter. [JAX FFI documentation](https://docs.jax.dev/en/latest/ffi.html)
 
+#### Native CPU implementation
+
+The opt-in packed CPU backend runs assembly, the optical solves, quantum noise, and the complete simulator pullback through two host calls. The component formulas and their reverse rules are generated ahead of time from the JAX source and compiled into one C++ extension. NumPy handles packed array operations, and the existing LAPACK and SuperLU paths perform the solves. The Python binding uses the CPython buffer protocol. The JAX wrapper still handles parameter links and the benchmark's readout. No serialized JAX kernels are loaded.
+
+These paired runs used the original `benchmark.py` and three warm repeats per fresh process, on the pinned Windows laptop above on 22 November 2026. The extension was built with MSVC 14.43 before starting the benchmark. The measured total includes loading it.
+
+| Pair | Backend | First incl. JIT (s) | JIT (s) | Warm (s) |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Packed control | 8.523 | 7.558 | 0.269 |
+| 1 | Native CPU | 1.905 | 0.762 | 0.320 |
+| 2 | Packed control | 8.852 | 7.786 | 0.286 |
+| 2 | Native CPU | 1.785 | 0.754 | 0.338 |
+
+Both native runs passed the scored sensitivity and finite-difference gradient checks. The worst scored log-sensitivity error was 5.37 × 10⁻⁶, and the largest gradient spot-check error was 1.06 × 10⁻⁸. All 13 setups passed the existing tolerances at the saved parameters and four perturbations each. The scored fixture's largest full-gradient error in that suite was 6.2 × 10⁻⁹. One process also ran cavity → UIFO → cavity with a changed parameter through the same loaded extension.
+
+Build with `python -m pip install -e .` using a C++ compiler and set `DIFFEROMETOR_NATIVE=1` before starting the benchmark process. The generated C++ include is part of the source distribution. A clean source archive built and imported on Windows. Regenerate the include with `python profiling/generate_native_components.py` after editing the component formulas. The backend stays opt-in because warm execution is slower and the native adapter currently returns reverse-mode gradients for design parameters. The default path retains forward-mode and other differentiable inputs.
+
 ## Benchmarking further changes
 
 For a quick cold-start measurement, run `python benchmark_slim.py` in a fresh process. The [slim runner](../benchmark_slim.py) uses the public UIFO fixture and the scored benchmark's forward, readout and gradient functions. Its single wall-clock time includes imports, CPU initialization, setup, JIT and transfer of the results back to the host. Use `benchmark.py` for the scored result, correctness checks, warm repeats and per-phase timings.

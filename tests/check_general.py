@@ -65,8 +65,10 @@ def worker(case_name, out_path, perturb):
     jax.config.update("jax_enable_compilation_cache", False)
 
     case = CASES[case_name]()
+    solver = os.environ.get("HARNESS_SIGNAL_SOLVER")
+    extra = {"signal_solver": solver, "pack_noise": solver == "packed"} if solver else {}
     arrays, ports, *_ = df.run_build_step(
-        case["setup"], case["changing_pairs"], jnp.asarray(case["changing_values"]), case["pairs"])
+        case["setup"], case["changing_pairs"], jnp.asarray(case["changing_values"]), case["pairs"], **extra)
     params = np.asarray(case["initial"])
     if perturb:
         # lengths are excluded: a relative nudge on a 4000 m length (1e-13 -> 4e-10 m ~ 0.14 deg of phase)
@@ -152,8 +154,11 @@ def main():
     ap.add_argument("--worker")
     ap.add_argument("--out")
     ap.add_argument("--perturb", action="store_true")
+    ap.add_argument("--signal-solver", help="pass signal_solver=... to run_build_step (branches that support it)")
     args = ap.parse_args()
 
+    if args.signal_solver:
+        os.environ["HARNESS_SIGNAL_SOLVER"] = args.signal_solver   # inherited by worker subprocesses
     if args.worker:
         worker(args.worker, args.out, args.perturb)
         return

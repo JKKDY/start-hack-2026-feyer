@@ -105,7 +105,21 @@ Warm repeats ranged from 10.4 to 24.2 s. The branch kept dense solves and was no
 | `67ceed2` | none | 12.05 | 8.89 | 0.309 |
 | `67ceed2` | set directly | 11.74 | 8.49 | 0.316 |
 
-The flag mainly shortens gradient compilation. After the fixed parameters were folded in, its gain is 0.3 s, which is within run-to-run noise. Warm time is unchanged. The flag is not adopted: the scored run uses the original `benchmark.py`, so it would have to be set inside `differometor/`. The organisers have not said whether that is allowed. `71b231d` itself is not part of `baseline-optimized`.
+The flag mainly shortened gradient compilation. After the fixed parameters were folded in, its 0.3 s gain was within run-to-run noise and warm time was unchanged. The packed baseline kept the default optimization level.
+
+### XLA settings with the native CPU backend
+
+The native backend at `2e61add` leaves small JAX wrappers around the host calls. On 22 November 2026, the original benchmark compared three fresh processes per setting in interleaved order on the same pinned Windows CPU, using JAX/JAXLIB 0.9.0. The warm column is the median of each process's three-repeat median.
+
+| XLA backend optimization level | Cold (s) | JIT (s) | Warm (s) |
+| --- | ---: | ---: | ---: |
+| Default | 1.817 | 0.752 | 0.332 |
+| 1 | 1.755 | 0.677 | 0.345 |
+| 0 | 1.529 | 0.435 | 0.344 |
+
+In a second interleaved comparison, adding `--xla_cpu_parallel_codegen_split_count=1` to level 0 took 1.550 s cold and 0.464 s JIT, versus 1.505 s and 0.436 s with level 0 alone. Both medians are from three fresh processes. Every run passed the benchmark's sensitivity and gradient spot checks. The largest log-sensitivity and gradient spot-check errors were 5.37 × 10⁻⁶ and 1.06 × 10⁻⁸. Level 0 alone passed all 13 setups at nominal and perturbed parameters. In a representative level 0 run, compilation and tracing took 0.134 s for forward, 0.153 s for readout, and 0.142 s for backward.
+
+For a cold-first application run, set `XLA_FLAGS=--xla_backend_optimization_level=0` in the process environment before starting Python with `DIFFEROMETOR_NATIVE=1`. The benchmark already selects CPU and double precision and disables the persistent cache. Keep the flag in the launch environment because it configures every XLA compilation in the process. [JAX XLA configuration](https://docs.jax.dev/en/latest/controlling-xla.html)
 
 ### Ahead-of-time compilation feasibility
 

@@ -18,7 +18,7 @@ Make one complete evaluation of the public Differometor simulator (Python + JAX,
 - Carrier, signal, noise, sensitivity, powers, loss, gradient all finite; gradient not identically zero.
 - Finite-difference check on `mb11.tuning` (steps 1e-3 and 5e-4, rtol 1%) must pass.
 - No precomputed answers, no omitted calculations. Fixture JSON files must stay byte-identical (SHA-checked).
-- Only edit `differometor/`. Don't modify `benchmark.py` (its hash is recorded in the report).
+- Only edit `differometor/`. Never modify `benchmark.py`: it must stay byte-identical to the original (`git diff 3b538f0 -- benchmark.py` is empty) because its hash is recorded in the report and the judges run the original. Anything the benchmark needs, such as a solver choice, must be the library default. For a variant (extra flags, profiling, other setups), copy it to a new file such as `benchmark_<purpose>.py` and edit the copy.
 
 ### ⚠️ Generality requirement (from the challenge provider)
 > "The goal is a simulator speedup that works beyond a specific setup. So the final evaluation will use a similar optical setup like the one included in the GitHub repo, but with slightly different parameters and components. Your simulator submissions should still work with that slight setup variation."
@@ -27,7 +27,7 @@ Consequences for every change:
 - Everything must be **derived from the loaded setup at build/trace time** — never hand-derived for this 3×3 UIFO. No hard-coded sizes (286, 751, 193, 101), port positions, detector counts, component lists, or "this fixture only uses functions X, Y".
 - Code paths this fixture never exercises (e.g. laser amplitude/frequency modulation functions, multiple detectors, carrier-changing parameter sweeps, empty index arrays) must still work.
 - Don't rely on this fixture's numerical headroom (current max log error 5.4e-6 vs 1e-5 limit). Different parameters may give worse-conditioned matrices (higher-finesse cavities) → keep pivoted LU and float64; no approximations.
-- The benchmark only checks the scored fixture, so a **generality test harness is mandatory** (see plan step 0b).
+- The benchmark only checks the scored fixture, so a **generality test harness is mandatory**: `python tests/check_general.py --suite all` must print ALL PASS (docs/correctness-harness.md).
 
 ### Submission
 Code, before/after JSON reports + plots, reproduction commands, short note on approach and correctness checks.

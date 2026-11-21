@@ -99,14 +99,9 @@ The table above uses the original simulator as its numerical reference. Against 
 
 On the 21-frequency grid, the new code's default dense path reproduced the previous physical outputs and loss bit for bit. Its maximum absolute gradient difference was 6.90×10⁻⁹.
 
-On `chris/static-indices` and `chris/numpy-build`, `benchmark.py` carries the `--signal-solver` flag from `47cc00a`, which defaults to packed. The library's `run_build_step()` still defaults to dense. The challenge forbids changes to `benchmark.py`, and the unmodified harness calls `run_build_step()` with its defaults. On these branches the official benchmark therefore runs the dense path. `baseline_plus_sparsity` (`894e6b9`) instead restores the original `benchmark.py` and makes packed the library default. Its acceptance covers the fixed benchmark workload, the supplied checks, and the tested full-gradient comparisons. The mixed-precision refinement below remains a diagnostic.
+`benchmark.py` must stay identical to the original challenge file. The judges run the original, and it calls `run_build_step()` without solver options. The fully packed build is therefore the library default: `signal_solver="packed"`, with `pack_noise` following it. Commit `47cc00a` had added a `--signal-solver` flag to `benchmark.py`, while the library default stayed dense. With the original file, that combination would have scored the dense path. `baseline_plus_sparsity` (`894e6b9`) and `chris/numpy-build` restore the original file and the packed default. Benchmark variants go in new files such as `benchmark_<purpose>.py`. The packed build's acceptance covers the fixed benchmark workload, the supplied checks, and the tested full-gradient comparisons. The mixed-precision refinement below remains a diagnostic.
 
-On branches with the modified `benchmark.py`, on Linux or WSL, compare the packed and dense builds:
-
-```bash
-python benchmark.py --cpus 1 --repeats 3 --output benchmark-packed.json --save-arrays packed.npz
-python benchmark.py --cpus 1 --repeats 3 --signal-solver dense --output benchmark-dense.json --save-arrays dense.npz
-```
+To compare the packed and dense builds on every harness setup, run `python tests/check_general.py --suite all` and again with `--signal-solver dense`. For the scored time of the dense reference, run the original `benchmark.py` from a checkout of `3b538f0`.
 
 ### Signal-field stability
 

@@ -488,8 +488,8 @@ def run_build_step(
     optimization_pairs: list | None = None,
     timeit: bool = False,
     *,
-    signal_solver: str = "dense",
-    pack_noise: bool = False,
+    signal_solver: str = "packed",
+    pack_noise: bool | None = None,
 ) -> tuple:
     """
     Build a `Setup` into simulation-ready arrays and matrices.
@@ -513,9 +513,11 @@ def run_build_step(
     signal_solver : str
         "dense" uses the reference solver. "sparse" gathers entries from the dense
         assembly and factors a sparse system on the CPU. "packed" also assembles
-        the frequency batch directly in sparse storage.
-    pack_noise : bool
+        the frequency batch directly in sparse storage. Defaults to "packed", so the
+        unmodified benchmark.py runs the packed build.
+    pack_noise : bool or None
         Evaluate the noise quadratic form using only occupied covariance entries.
+        If None, use packed covariance with the packed signal solver.
 
     Returns
     -------
@@ -537,6 +539,8 @@ def run_build_step(
     """
     if signal_solver not in ("dense", "sparse", "packed"):
         raise ValueError(f"Unknown signal solver: {signal_solver}")
+    if pack_noise is None:
+        pack_noise = signal_solver == "packed"
     start = time()
 
     instructions, matrices, metadata = build(setup)

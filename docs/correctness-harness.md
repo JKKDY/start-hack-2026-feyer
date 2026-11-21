@@ -6,12 +6,14 @@
 
 The references are committed in `tests/reference/`, so a fresh checkout can verify a change at once. Nobody needs to run the slow original simulator again.
 
-1. Run `python tests/check_general.py --suite all`. Add `--signal-solver packed` if the change affects that path on a branch where `run_build_step` defaults to `dense`.
+1. Run `python tests/check_general.py --suite all`. It tests `run_build_step()`'s default solver, which is the path the original `benchmark.py` scores. Add `--signal-solver dense` to test the dense path as well.
 2. Require `ALL PASS`. A failure prints the case, the point (0 is nominal, 1–4 are fuzzed), the quantity, its error and its tolerance. The JSON report has every value.
 3. For speed, compare the report's `first_run_total` and `warm_median` with an earlier report from the same machine. The stored reference timings come from the laptop described below. The printed speedups are exact only there.
 4. Also run `python benchmark.py --cpus 1` for the official check and scored time.
 
 Run `--save` again only when the cases, the fuzz rules (`FUZZ_VERSION`), the sample settings or the reference ref change. Then commit the new `tests/reference/` with that change.
+
+Claude Code agents also get these steps as the project skill `verify-change`, in [`.claude/skills/verify-change/SKILL.md`](../.claude/skills/verify-change/SKILL.md). The skill points back to this document.
 
 ## Commands
 
@@ -154,4 +156,6 @@ All 13 cases passed in both modes. The dense path reproduced the reference carri
 
 The build step now runs in NumPy, and this commit merges the harness into the branch. All 13 cases passed in both modes, with the same errors as on `chris/static-indices`. For `uifo3_scored`, the first run took 36.2 s dense and 15.4 s packed. The packed build step took 0.05 s, and the packed warm median was 0.312 s.
 
-Remember the solver default when you run the harness. Check mode uses `run_build_step()`'s own default unless you pass `--signal-solver`. On these branches that default is dense.
+These runs were made before `run_build_step()`'s default changed to packed and the original `benchmark.py` was restored. Since then, a plain check run tests the packed path, the same path the original benchmark scores.
+
+After that change, a plain `--suite all` run passed all 13 cases with the same errors as the packed runs above. For `uifo3_scored`, the first run took 15.1 s and the warm median was 0.304 s. The original `benchmark.py` printed `PASS` with 3 repeats. It ran from a checkout with LF line endings and was pinned to one CPU by an external wrapper. Its complete first-run total was 15.43 s and its warm median 0.296 s.

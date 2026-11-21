@@ -40,6 +40,16 @@ These candidates were tested independently on top of `089afa2`, with the same wo
 
 Neither change was retained. The sweep scatter was faster warm but slower in both first-run measurements. The retest preserved the existing path for parameter arrays already expanded by a carrier sweep. Checkpointing reduced forward compilation time in the repeat from 9.17 s to 6.19 s, while gradient compilation rose from 5.12 s to 9.17 s. Its first-run improvement did not repeat, and the warm median was slightly slower.
 
+To check repeatability faster, a diagnostic used every fifth frequency from the public grid (21 frequencies, including both endpoints) and all 193 design variables. Each variant ran three times in fresh processes, with a different run order each round and three warm evaluations per process. All reduced-grid physical outputs and gradients matched the control within the experiment tolerances.
+
+| Variant | Median first run incl. JIT (s) | Median JIT (s) | Median warm (s) |
+| --- | ---: | ---: | ---: |
+| Detector selection control | 17.79 | 12.26 | 2.35 |
+| Simplified parameter-sweep scatter | 17.33 | 12.01 | 2.47 |
+| Checkpointed component coefficients | 19.56 | 13.75 | 2.36 |
+
+The control's first runs ranged from 17.14 s to 18.17 s. Sweep indexing was faster in two rounds and slower in one, while checkpointing was slower in all three. The reduced grid is a quick repeatability check. The complete 101-frequency workload remains the acceptance benchmark.
+
 ## Benchmarking further changes
 
 Run each candidate and its control in fresh processes on the same hardware and pinned dependency versions. Use the complete first-run total for the main comparison and record JIT, warm runtime, and peak process memory separately. Repeat close first-run comparisons in reverse order. Compare full physical outputs and gradients at both parameter points before retaining a change.

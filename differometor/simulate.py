@@ -368,19 +368,12 @@ def simulate(
         unique_indices=True,
     )
 
-    # Broadcast selection vectors across the carrier sweep dimension.
-    noise_selection_vectors = jnp.tile(noise_selection_vectors, (1, carrier.shape[0], 1))
-
-    # Select necessary carrier entries and build upper and lower sideband selections.
-    upper_carrier_selections = noise_selection_vectors[:, :, : carrier.shape[1]] * carrier
-    upper_carrier_selections = noise_selection_vectors.at[:, :, : carrier.shape[1]].set(upper_carrier_selections)
-
-    lower_carrier_selections = jnp.conjugate(
-        upper_carrier_selections[:, :, carrier.shape[1] : carrier.shape[1] * 2] * carrier
-    )
-    carrier_selections = upper_carrier_selections.at[
-        :, :, carrier.shape[1] : carrier.shape[1] * 2
-    ].set(lower_carrier_selections)
+    # The carrier multiplication broadcasts the optical selections across the sweep.
+    upper = noise_selection_vectors[..., :carrier_size] * carrier
+    lower = jnp.conjugate(noise_selection_vectors[..., carrier_size : 2 * carrier_size] * carrier)
+    extra = noise_selection_vectors[..., 2 * carrier_size :]
+    extra = jnp.broadcast_to(extra, (*upper.shape[:-1], extra.shape[-1]))
+    carrier_selections = jnp.concatenate((upper, lower, extra), axis=-1)
 
     # Back-propagate detector weights by solving the transposed conjugated signal system.
     transposed_conjugated_signal_matrix = jnp.transpose(jnp.conjugate(signal_matrix[:, :, :-1]), (0, 2, 1))

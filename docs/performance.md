@@ -1,6 +1,6 @@
 # Differometor performance experiments
 
-The packed sparse build is accepted for the benchmark workload. It passed the supplied sensitivity and gradient checks, and all 193 gradient values agreed with the original within the additional comparison tolerance at both tested parameter points. The local first-run time, including JIT, fell from **63.13 s to 16.80 s**. The warm median fell from **33.278 s to 0.227 s**. The strict elementwise comparison of raw signal fields still reports differences in the sparse modes.
+The packed sparse build passed the original, unchanged benchmark harness. All 193 gradient values also agreed with the original solver within the additional comparison tolerance at both tested parameter points. The local first-run time, including JIT, fell from **63.13 s to 16.98 s**. The warm median fell from **33.278 s to 0.245 s**. The strict elementwise comparison of raw signal fields still reports differences in the sparse modes.
 
 ## Accepted optimization history
 
@@ -14,9 +14,9 @@ The table tracks cumulative builds on one pinned logical CPU on an Intel Core i7
 | Detector selections without tiling (`089afa2`) | 41.50 | 15.62 | 18.567 | Pass (5.38e-6) | Pass (6.97e-7) | 1.90e-8 / 1.31e-7 | 0 / 0 | 0 / 0 |
 | Shared sparse LU with dense assembly | 34.16 | 13.99 | 8.366 | Pass (5.37e-6) | Pass (1.32e-8) | 2.20e-9 / 1.22e-7 | 2.04e-7 / 1.45e-7 | 3,427 / 3,433 |
 | Packed sparse signal assembly | 19.10 | 13.29 | 1.959 | Pass (5.37e-6) | Pass (1.32e-8) | 2.20e-9 / 1.22e-7 | 2.04e-7 / 1.45e-7 | 3,427 / 3,433 |
-| Packed signal and noise, benchmark default (`47cc00a`) | **16.80** | **12.66** | **0.227** | Pass (5.37e-6) | Pass (1.32e-8) | 2.31e-9 / 1.22e-7 | 2.04e-7 / 1.45e-7 | 3,427 / 3,433 |
+| Packed signal and noise, original harness | **16.98** | **12.79** | **0.245** | Pass (5.37e-6) | Pass (1.32e-8) | 2.31e-9 / 1.22e-7 | 2.04e-7 / 1.45e-7 | 3,427 / 3,433 |
 
-The original row is the fresh local dense calibration. The repository's [published CPU baseline](../benchmarks/cpu-baseline.json) was measured on a different host and recorded 44.20 s first run, 22.92 s JIT, and 17.68 s warm. The fully packed prototype previously recorded 18.34 s first run and 0.248 s warm. The table uses its later verification run as the default.
+The original row is the fresh local dense calibration. The repository's [published CPU baseline](../benchmarks/cpu-baseline.json) was measured on a different host and recorded 44.20 s first run, 22.92 s JIT, and 17.68 s warm. Earlier packed runs used a development harness with solver flags. The table uses the original-harness timing and retains the previously tested perturbed outputs for the same packed implementation.
 
 ### How to read the numerical checks
 
@@ -86,22 +86,23 @@ The experimental CPU path uses one SuperLU factorization per frequency to solve 
 | Detector selections without tiling | 8.33 | 15.03 |
 | Shared sparse LU with dense assembly | 6.66 | 8.23 |
 | Packed sparse signal assembly | 3.85 | 3.89 |
-| Packed signal and noise verification run | 0.51 | 0.54 |
+| Packed signal and noise development run | 0.51 | 0.54 |
 
 In a fresh cold rerun, the dense reference took 42.99 s including JIT and the fully packed mode took 18.05 s.
 
 The table above uses the original simulator as its numerical reference. Against the last optimized dense build, the fully packed prototype's full-gradient relative L2 differences were 1.74×10⁻⁸ at the saved point and 2.53×10⁻⁷ at the perturbed point.
 
-On the 21-frequency grid, the new code's default dense path reproduced the previous physical outputs and loss bit for bit. Its maximum absolute gradient difference was 6.90×10⁻⁹.
+On the 21-frequency grid, the dense reference path reproduced the previous physical outputs and loss bit for bit. Its maximum absolute gradient difference was 6.90×10⁻⁹.
 
-The fully packed build is the benchmark default. Its acceptance covers the fixed benchmark workload, the supplied checks, and the tested full-gradient comparisons. The library's `run_build_step()` still defaults to dense and accepts `signal_solver="packed", pack_noise=True` for callers that opt in. The mixed-precision refinement below remains a diagnostic.
+The fully packed build is the simulator default. Its acceptance covers the fixed benchmark workload, the supplied checks, and the tested full-gradient comparisons. Callers can select the dense reference through `run_build_step(..., signal_solver="dense")`. The mixed-precision refinement below remains a diagnostic.
 
-On Linux or WSL, compare the default build with the dense reference:
+The challenge's `benchmark.py` is unchanged from `3b538f0`. On Linux or WSL, run it on this branch for the packed build:
 
 ```bash
 python benchmark.py --cpus 1 --repeats 3 --output benchmark-packed.json --save-arrays packed.npz
-python benchmark.py --cpus 1 --repeats 3 --signal-solver dense --output benchmark-dense.json --save-arrays dense.npz
 ```
+
+For the original dense reference, run the same command from a separate checkout of `3b538f0`, with a distinct output path and the same Python environment, hardware, and CPU limits.
 
 ### Signal-field stability
 

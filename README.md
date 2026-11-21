@@ -32,7 +32,7 @@ For reproducible measurements, numerical checks and the five-bar plot, use the f
 python benchmark.py --cpus 1 --output benchmark-packed.json
 ```
 
-`--cpus 1` pins the process to one logical CPU on Linux/WSL. The benchmark defaults to packed sparse signal assembly and packed noise covariance. Use `--signal-solver dense` for the dense reference, `--repeats 3` for a shorter run, or `--save-arrays packed.npz` to save outputs. A successful run prints `PASS` and writes the JSON report and timing plot. [Performance notes](docs/performance.md) describe the numerical comparisons and benchmark timings.
+`--cpus 1` pins the process to one logical CPU on Linux/WSL. The simulator defaults to packed sparse signal assembly and packed noise covariance. The original benchmark calls the simulator with those defaults. Use `--repeats 3` for a shorter run or `--save-arrays packed.npz` to save outputs. A successful run prints `PASS` and writes the JSON report and timing plot. [Performance notes](docs/performance.md) describe the reference checkout, numerical comparisons, and timings.
 
 ## If setup fails
 

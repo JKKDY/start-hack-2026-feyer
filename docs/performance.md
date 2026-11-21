@@ -61,3 +61,26 @@ python benchmark.py --cpus 1 --repeats 3 --output benchmark-candidate.json --sav
 ```
 
 The Windows experiments pinned the Python process externally before importing JAX because the benchmark's `--cpus` flag uses Linux affinity. A local harness recorded process memory and evaluated the second parameter point outside the timed phases. The reference fixture is checked byte for byte, so use a checkout that preserves its LF line endings. The standard command saves arrays for the nominal point.
+
+## Structural solver experiments
+
+The experimental CPU path uses one SuperLU factorization per frequency to solve the signal system and its detector adjoint. JAX differentiates the linear systems implicitly, including the complex transpose solve in the backward pass. Sparse assembly then removes the dense frequency-batched signal matrix. Packing the covariance separately removes the dense noise batch by contracting its occupied entries with the detector weights.
+
+| Mode | First run incl. JIT (s) | JIT (s) | Warm median (s) | Peak working set (GiB) |
+| --- | ---: | ---: | ---: | ---: |
+| Dense reference | 41.50 | 15.62 | 18.57 | 8.33 |
+| Sparse solve, dense assembly | 34.16 | 13.99 | 8.37 | 6.66 |
+| Sparse solve and packed signal assembly | 19.10 | 13.29 | 1.96 | 3.85 |
+| Packed signal and noise covariance | 18.34 | 13.95 | 0.25 | 0.47 |
+
+In a fresh cold rerun, the dense reference took 42.99 s including JIT and the fully packed mode took 18.05 s.
+
+All three experimental modes passed the standard reference sensitivity and finite-difference gradient checks on 101 frequencies. The fully packed result matched all 193 gradient coordinates within the experiment tolerance at the saved and perturbed points, with relative L2 differences of 1.74×10⁻⁸ and 2.53×10⁻⁷ against the dense control. Its largest per-frequency relative L2 signal-field error was 2.04×10⁻⁷. Individual signal entries still failed the earlier strict elementwise comparison, including entries close to zero relative to their field vectors. The dense solver remains the default.
+
+On the 21-frequency grid, the new code's default dense path reproduced the previous physical outputs and loss bit for bit. Its maximum absolute gradient difference was 6.90×10⁻⁹.
+
+On Linux or WSL, reproduce the fully packed CPU run with:
+
+```bash
+python benchmark.py --cpus 1 --repeats 3 --signal-solver packed --pack-noise --output benchmark-packed.json --save-arrays packed.npz
+```

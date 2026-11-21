@@ -26,6 +26,7 @@ from jax import lax, vmap, jit
 from differometor.setups import Setup
 from differometor.build import build, pairs_to_arrays, prepare_arrays, LINKING_FUNCTIONS
 from differometor.components import FUNCTIONS, UNIT_VACUUM, H_PLANCK, F0
+from differometor.sparse_signal import build_signal_pattern, pack_noise_template, pack_signal_template, solve_signal_and_adjoint
 
 
 jax.config.update("jax_enable_x64", True)
@@ -202,6 +203,10 @@ def simulate(
     noise_function_indices: jnp.ndarray,
     noise_output_indices: tuple[jnp.ndarray, jnp.ndarray],
     noise_system_matrix_indices: tuple[jnp.ndarray, jnp.ndarray],
+    *,
+    signal_sparsity=None,
+    packed_signal=None,
+    packed_noise=None,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """
     Run one full simulation pass: carrier, signal, and quantum noise.
@@ -234,6 +239,12 @@ def simulate(
         Base signal augmented matrix, shape (SN, SN + 1).
     noise_matrix : jnp.ndarray
         Noise source covariance matrix, shape (NN, NN) or broadcastable for vmap.
+    signal_sparsity : tuple of arrays or None
+        Optional column-compressed signal pattern for the experimental CPU solver.
+    packed_signal : PackedSignal or None
+        Optional coefficient template and scatter slots for sparse assembly.
+    packed_noise : PackedNoise or None
+        Optional occupied covariance entries for direct noise contraction.
     noise_selection_vectors : jnp.ndarray
         Detector selection vectors, shape (D, 1, setup_size).
     qhd_parameter_indices : jnp.ndarray
@@ -317,38 +328,34 @@ def simulate(
     # Signal solve
     # --------------------
     parameters = expand_parameters(parameters, signal_changing_parameter_indices, signal_changing_values)
-    signal_matrix = vmap(update, in_axes=(0, None, None, None, None, None))(
-        parameters,
-        signal_matrix,
-        signal_function_input_indices,
-        signal_output_indices,
-        signal_matrix_indices,
-        signal_function_indices,
-    )
-
-    # Scale signal connector entries by the carrier solution at the respective spaces.
-    # The minus sign matches the sign convention used by the referenced modeling tools.
-    signal_entries = (
-        -signal_matrix[:, signal_carrier_placing_indices[0], signal_carrier_placing_indices[1]]
-        * carrier[:, signal_carrier_indices.flatten()]
-    )
-    signal_matrix = signal_matrix.at[:, signal_carrier_placing_indices[0], signal_carrier_placing_indices[1]].set(
-        signal_entries
-    )
-
-    # Apply conjugation rules to enforce upper and lower sideband symmetry.
     carrier_size = carrier.shape[1]
-    signal_matrix = signal_matrix.at[:, carrier_size : carrier_size * 2, carrier_size : carrier_size * 2].set(
-        jnp.conjugate(signal_matrix[:, carrier_size : carrier_size * 2, carrier_size : carrier_size * 2])
-    )
-    signal_matrix = signal_matrix.at[:, carrier_size * 2 :, :carrier_size].set(
-        jnp.conjugate(signal_matrix[:, carrier_size * 2 :, :carrier_size])
-    )
-    signal_matrix = signal_matrix.at[:, carrier_size : carrier_size * 2, carrier_size * 2 :].set(
-        jnp.conjugate(signal_matrix[:, carrier_size : carrier_size * 2, carrier_size * 2 :])
-    )
-
-    signal = vmap(solve)(signal_matrix[:, :, :-1], signal_matrix[:, :, -1])
+    carrier_coupling = carrier[:, signal_carrier_indices.flatten()]
+    if packed_signal is None:
+        signal_matrix = vmap(update, in_axes=(0, None, None, None, None, None))(
+            parameters, signal_matrix, signal_function_input_indices, signal_output_indices,
+            signal_matrix_indices, signal_function_indices,
+        )
+        coupling = (slice(None), *signal_carrier_placing_indices)
+        signal_matrix = signal_matrix.at[coupling].set(-signal_matrix[coupling] * carrier_coupling)
+        # Conjugate the lower sideband and its couplings to the extra degrees of freedom.
+        lower = (slice(None), slice(carrier_size, 2 * carrier_size), slice(carrier_size, 2 * carrier_size))
+        extra = (slice(None), slice(2 * carrier_size, None), slice(None, carrier_size))
+        lower_coupling = (slice(None), slice(carrier_size, 2 * carrier_size), slice(2 * carrier_size, None))
+        signal_matrix = signal_matrix.at[lower].set(signal_matrix[lower].conj())
+        signal_matrix = signal_matrix.at[extra].set(signal_matrix[extra].conj())
+        signal_matrix = signal_matrix.at[lower_coupling].set(signal_matrix[lower_coupling].conj())
+        signal_rhs = signal_matrix[:, :, -1]
+    else:
+        updates = vmap(component_coefficients, in_axes=(0, None, None, None))(
+            parameters, signal_function_input_indices, signal_output_indices, signal_function_indices,
+        )
+        coefficients = jnp.broadcast_to(packed_signal.template, (parameters.shape[0], packed_signal.template.size))
+        coefficients = coefficients.at[:, packed_signal.update_slots].set(updates)
+        coupling = (slice(None), packed_signal.coupling_slots)
+        coefficients = coefficients.at[coupling].set(-coefficients[coupling] * carrier_coupling)
+        coefficients = jnp.where(packed_signal.conjugate, coefficients.conj(), coefficients)
+        nnz = signal_sparsity[0].size
+        signal_data, signal_rhs = coefficients[:, :nnz], coefficients[:, nnz:]
 
     # --------------------
     # Quantum noise solve
@@ -376,46 +383,45 @@ def simulate(
     carrier_selections = jnp.concatenate((upper, lower, extra), axis=-1)
 
     # Back-propagate detector weights by solving the transposed conjugated signal system.
-    transposed_conjugated_signal_matrix = jnp.transpose(jnp.conjugate(signal_matrix[:, :, :-1]), (0, 2, 1))
     carrier_selections = jnp.broadcast_to(
         carrier_selections,
-        (carrier_selections.shape[0], transposed_conjugated_signal_matrix.shape[0], carrier_selections.shape[2]),
+        (carrier_selections.shape[0], signal_rhs.shape[0], carrier_selections.shape[2]),
     )
-    noise_weights = vmap(vmap(solve), in_axes=(None, 0))(transposed_conjugated_signal_matrix, carrier_selections)
-
-    # Update noise source matrix (may depend on current parameters).
-    noise_matrix = vmap(update, in_axes=(0, None, None, None, None, None))(
-        parameters,
-        noise_matrix,
-        noise_function_input_indices,
-        noise_output_indices,
-        noise_system_matrix_indices,
-        noise_function_indices,
-    )
-
-    def matmul_single_batch(matrix_batch: jnp.ndarray, vector_batch: jnp.ndarray) -> jnp.ndarray:
-        """
-        Multiply a batch of matrices with a batch of vectors.
-
-        Parameters
-        ----------
-        matrix_batch : jnp.ndarray
-            Shape (B, N, N).
-        vector_batch : jnp.ndarray
-            Shape (B, N).
-
-        Returns
-        -------
-        product : jnp.ndarray
-            Shape (B, N).
-        """
-        return jnp.einsum("bij,bj->bi", matrix_batch, vector_batch)
-
-    # Apply the noise covariance to the back-propagated detector weights.
-    noise_sources = vmap(matmul_single_batch, in_axes=(None, 0))(noise_matrix, noise_weights)
+    if signal_sparsity is None:
+        system = signal_matrix[:, :, :-1]
+        signal = vmap(solve)(system, signal_rhs)
+        adjoint = jnp.swapaxes(system.conj(), -1, -2)
+        noise_weights = vmap(vmap(solve), in_axes=(None, 0))(adjoint, carrier_selections)
+    else:
+        if packed_signal is None:
+            rows, columns, _ = signal_sparsity
+            signal_data = signal_matrix[:, rows, columns]
+        signal, weights = solve_signal_and_adjoint(
+            signal_data.astype(jnp.complex128),
+            signal_sparsity,
+            signal_rhs.astype(jnp.complex128),
+            jnp.transpose(carrier_selections, (1, 2, 0)).astype(jnp.complex128),
+        )
+        noise_weights = jnp.transpose(weights, (2, 0, 1))
 
     # Since A^H u = d, the detector variance d^H A^-1 Q u reduces to u^H Q u.
-    noise_variance = jnp.real(jnp.sum(jnp.conjugate(noise_weights) * noise_sources, axis=2))
+    if packed_noise is None:
+        noise_matrix = vmap(update, in_axes=(0, None, None, None, None, None))(
+            parameters, noise_matrix, noise_function_input_indices, noise_output_indices,
+            noise_system_matrix_indices, noise_function_indices,
+        )
+        noise_sources = jnp.einsum("bij,dbj->dbi", noise_matrix, noise_weights)
+        variance_terms = noise_weights.conj() * noise_sources
+    else:
+        updates = vmap(component_coefficients, in_axes=(0, None, None, None))(
+            parameters, noise_function_input_indices, noise_output_indices, noise_function_indices,
+        )
+        values = jnp.broadcast_to(packed_noise.template, (updates.shape[0], packed_noise.template.size))
+        values = values.at[:, packed_noise.update_slots].set(updates)
+        variance_terms = noise_weights[..., packed_noise.rows].conj() * (
+            values * noise_weights[..., packed_noise.columns]
+        )
+    noise_variance = jnp.real(jnp.sum(variance_terms, axis=-1))
     noise = jnp.sqrt(2 * noise_variance * UNIT_VACUUM * H_PLANCK * F0 * 0.25)
 
     return carrier.T, signal.T, noise.squeeze()
@@ -453,6 +459,9 @@ def run_build_step(
     changing_values: jnp.ndarray | None = None,
     optimization_pairs: list | None = None,
     timeit: bool = False,
+    *,
+    signal_solver: str = "dense",
+    pack_noise: bool = False,
 ) -> tuple:
     """
     Build a `Setup` into simulation-ready arrays and matrices.
@@ -473,6 +482,12 @@ def run_build_step(
         the parameter vector before solving). If None, no optimized parameters exist.
     timeit : bool
         If True, return an additional timing measurement (seconds) for the build.
+    signal_solver : str
+        "dense" uses the reference solver. "sparse" gathers entries from the dense
+        assembly and factors a sparse system on the CPU. "packed" also assembles
+        the frequency batch directly in sparse storage.
+    pack_noise : bool
+        Evaluate the noise quadratic form using only occupied covariance entries.
 
     Returns
     -------
@@ -492,6 +507,8 @@ def run_build_step(
     -----
     The returned dictionary keys are derived from the `simulate` function signature.
     """
+    if signal_solver not in ("dense", "sparse", "packed"):
+        raise ValueError(f"Unknown signal solver: {signal_solver}")
     start = time()
 
     instructions, matrices, metadata = build(setup)
@@ -514,6 +531,16 @@ def run_build_step(
         )
 
     simulation_arrays = {arg_names[i]: array for i, array in enumerate(all_arrays)}
+    if signal_solver != "dense":
+        template, updates, coupling = matrices[2], signal_arrays[3], signal_arrays[5]
+        pattern = build_signal_pattern(template, updates, coupling)
+        simulation_arrays["signal_sparsity"] = pattern
+        if signal_solver == "packed":
+            simulation_arrays["packed_signal"] = pack_signal_template(
+                template, pattern, updates, coupling, matrices[1].shape[0],
+            )
+    if pack_noise:
+        simulation_arrays["packed_noise"] = pack_noise_template(matrices[3], noise_arrays[3])
 
     if timeit:
         for array in simulation_arrays.values():

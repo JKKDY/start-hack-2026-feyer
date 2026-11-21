@@ -1,0 +1,116 @@
+"""Experimental CPU signal solver with a shared sparse factorization."""
+
+from functools import partial
+from typing import NamedTuple
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+from scipy.sparse import csc_matrix
+from scipy.sparse.linalg import splu
+
+
+class PackedSignal(NamedTuple):
+    template: jax.Array
+    update_slots: jax.Array
+    coupling_slots: jax.Array
+    conjugate: jax.Array
+
+
+class PackedNoise(NamedTuple):
+    template: jax.Array
+    update_slots: jax.Array
+    rows: jax.Array
+    columns: jax.Array
+
+
+def pack_noise_template(template, update_indices):
+    """Give repeated covariance writes the same destination slot."""
+    matrix = np.asarray(template)
+    initial = np.asarray(np.nonzero(matrix))
+    updates = np.asarray(update_indices)
+    coordinates, inverse = np.unique(np.concatenate((initial, updates), axis=1).T, axis=0, return_inverse=True)
+    rows, columns = coordinates.T
+    return PackedNoise(*(jnp.asarray(value) for value in (
+        matrix[rows, columns], inverse[initial.shape[1]:], rows, columns,
+    )))
+
+
+def build_signal_pattern(template, update_indices, coupling_indices):
+    """Find entries that can be nonzero before frequency or parameter sweeps."""
+    size = template.shape[0]
+    possible = np.asarray(template)[:, :-1] != 0
+    for indices in (update_indices, coupling_indices):
+        rows, columns = np.asarray(indices)
+        columns = columns % template.shape[1]
+        matrix_entries = columns < size
+        possible[rows[matrix_entries], columns[matrix_entries]] = True
+    columns, rows = np.nonzero(possible.T)
+    pointers = np.concatenate(([0], np.cumsum(np.bincount(columns, minlength=size))))
+    return tuple(jnp.asarray(array, dtype=jnp.int32) for array in (rows, columns, pointers))
+
+
+def pack_signal_template(template, pattern, update_indices, coupling_indices, carrier_size):
+    """Map matrix writes to coefficient slots, with the right-hand side at the end."""
+    dense = np.asarray(template)
+    size = len(dense)
+    rows, columns = map(np.asarray, pattern[:2])
+    slots = np.full(dense.shape, -1, dtype=np.int32)
+    slots[rows, columns] = np.arange(len(rows))
+    slots[:, -1] = np.arange(len(rows), len(rows) + size)
+    update_slots = slots[tuple(np.asarray(update_indices))]
+    coupling_slots = slots[tuple(np.asarray(coupling_indices))]
+    packed = np.concatenate((dense[rows, columns], dense[:, -1]))
+
+    slot_rows = np.concatenate((rows, np.arange(size)))
+    slot_columns = np.concatenate((columns, np.full(size, size)))
+    lower_rows = (slot_rows >= carrier_size) & (slot_rows < 2 * carrier_size)
+    conjugate = (lower_rows & (slot_columns >= carrier_size)) | (
+        (slot_rows >= 2 * carrier_size) & (slot_columns < carrier_size)
+    )
+    return PackedSignal(*(jnp.asarray(value) for value in (packed, update_slots, coupling_slots, conjugate)))
+
+
+def _factor_and_solve(coefficients, rows, pointers, signal_rhs, detector_rhs, *, transpose):
+    coefficients, rows, pointers, signal_rhs, detector_rhs = map(
+        np.asarray, (coefficients, rows, pointers, signal_rhs, detector_rhs)
+    )
+    signal = np.empty_like(signal_rhs)
+    detectors = np.empty_like(detector_rhs)
+    size = signal_rhs.shape[1]
+    for frequency, entries in enumerate(coefficients):
+        factors = splu(csc_matrix((entries, rows, pointers), shape=(size, size)))
+        signal[frequency] = factors.solve(signal_rhs[frequency], trans="T" if transpose else "N")
+        if detector_rhs.shape[-1]:
+            rhs = detector_rhs[frequency]
+            # The linear transpose of the detector's A^H system is conj(A).
+            detectors[frequency] = (
+                factors.solve(rhs.conj()).conj() if transpose else factors.solve(rhs, trans="H")
+            )
+    return signal, detectors
+
+
+def solve_signal_and_adjoint(coefficients, pattern, signal_rhs, detector_rhs):
+    """Solve A x = b and A^H u = d with implicit derivatives through A."""
+    rows, columns, pointers = pattern
+    result_spec = tuple(
+        jax.ShapeDtypeStruct(rhs.shape, rhs.dtype) for rhs in (signal_rhs, detector_rhs)
+    )
+
+    def matvec(vectors):
+        signal, detectors = vectors
+        signal_product = jnp.zeros_like(signal).at[:, rows].add(coefficients * signal[:, columns])
+        detector_product = jnp.zeros_like(detectors).at[:, columns].add(
+            coefficients.conj()[..., None] * detectors[:, rows, :]
+        )
+        return signal_product, detector_product
+
+    def solve(_, rhs, *, transpose=False):
+        return jax.pure_callback(
+            partial(_factor_and_solve, transpose=transpose),
+            result_spec, coefficients, rows, pointers, *rhs, vmap_method="sequential",
+        )
+
+    return jax.lax.custom_linear_solve(
+        matvec, (signal_rhs, detector_rhs), solve, partial(solve, transpose=True),
+    )

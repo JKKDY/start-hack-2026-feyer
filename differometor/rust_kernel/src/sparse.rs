@@ -2,17 +2,30 @@ use num_complex::Complex64 as C;
 use std::{ffi::c_void, slice};
 
 extern "C" {
+    fn optical_prepare(
+        n: i32,
+        nz: i32,
+        data: *const C,
+        rows: *const i32,
+        ptr: *const i32,
+    ) -> *mut c_void;
+    fn optical_finish(plan: *mut c_void);
     fn optical_factor(
         n: i32,
         nz: i32,
         data: *const C,
         rows: *const i32,
         ptr: *const i32,
-        order: *mut i32,
-        prepare: bool,
+        plan: *mut c_void,
     ) -> *mut c_void;
     fn optical_solve(f: *mut c_void, mode: i32, nrhs: i32, x: *mut C) -> i32;
     fn optical_release(f: *mut c_void);
+}
+struct Plan(*mut c_void);
+impl Drop for Plan {
+    fn drop(&mut self) {
+        unsafe { optical_finish(self.0) }
+    }
 }
 struct Factors(*mut c_void);
 impl Drop for Factors {
@@ -171,7 +184,19 @@ pub unsafe extern "C" fn optical_sweep(
     }) {
         return -1;
     }
-    let mut order = vec![0; n];
+    if batch == 0 {
+        return 0;
+    }
+    let plan = Plan(optical_prepare(
+        n as i32,
+        nz as i32,
+        values,
+        rows.as_ptr(),
+        ptr.as_ptr(),
+    ));
+    if plan.0.is_null() {
+        return 1;
+    }
     let mut work = Work::new(n * det.max(1));
     for b in 0..batch {
         let a = Matrix {
@@ -185,8 +210,7 @@ pub unsafe extern "C" fn optical_sweep(
             a.values.as_ptr(),
             rows.as_ptr(),
             ptr.as_ptr(),
-            order.as_mut_ptr(),
-            b == 0,
+            plan.0,
         );
         if raw.is_null() {
             return 1;

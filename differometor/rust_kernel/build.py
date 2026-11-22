@@ -19,22 +19,29 @@ def build_sparse(source, work, destination, cargo, compiler):
         "/opt/homebrew/opt/superlu/include", "/usr/local/opt/superlu/include",
     )
     include = next((Path(p) for p in candidates if (Path(p) / "slu_zdefs.h").is_file()), None)
+    klu_dirs = (os.environ.get("KLU_INCLUDE_DIR", "/usr/include/suitesparse"),
+                "/opt/homebrew/opt/suite-sparse/include/suitesparse",
+                "/usr/local/opt/suite-sparse/include/suitesparse")
+    klu = next((Path(d) for d in klu_dirs if (Path(d) / "klu.h").is_file()), None)
+    bridge = "klu_bridge.cc" if klu else "sparse_bridge.cc"
+    library = "klu" if klu else "superlu"
+    include = klu or include
     if include is None:
-        print("SuperLU headers unavailable; using the SciPy sparse solver.")
+        print("Sparse solver headers unavailable; using the SciPy sparse solver.")
         return
     obj = work / "sparse_bridge.o"
     subprocess.run([
         compiler, "-O2", "-std=c++17", "-fPIC", "-I" + str(include),
-        "-c", str(source / "sparse_bridge.cc"), "-o", str(obj),
+        "-c", str(source / bridge), "-o", str(obj),
     ], check=True)
     prefix = include.parent.parent if include.parent.name == "include" else include.parent
-    libdir = os.environ.get("SUPERLU_LIBRARY_DIR", str(prefix / "lib"))
+    libdir = os.environ.get("KLU_LIBRARY_DIR" if klu else "SUPERLU_LIBRARY_DIR", str(prefix / "lib"))
     cpp = "-lc++" if sys.platform == "darwin" else "-lstdc++"
     subprocess.run([
         cargo, "rustc", "--example", "sparse", "--release", "--locked",
         "--target-dir", str(work / "target"), "--",
         "-C", "link-arg=" + str(obj), "-C", "link-arg=-L" + libdir,
-        "-C", "link-arg=-lsuperlu", "-C", "link-arg=" + cpp,
+        "-C", "link-arg=-l" + library, "-C", "link-arg=" + cpp,
     ], cwd=work, check=True)
     binary = work / "target/release/examples" / ("libsparse" + destination.suffix)
     binary.replace(destination.with_name("sparse-" + destination.name))

@@ -26,6 +26,12 @@ python start_here.py
 
 [`start_here.py`](start_here.py) walks through one complete simulation and gradient calculation in five steps. It prints setup time, compilation time, and combined simulation/sensitivity/gradient runtime. It runs once using the CPUs available to the process.
 
+For the fastest tested CPU configuration, install Cargo, a C++17 compiler, and the SuiteSparse development libraries before running the benchmark. On Debian or Ubuntu install `libsuitesparse-dev`. On macOS use `brew install suite-sparse`. After installing the editable Python package, build the generic native kernels once in the active environment.
+
+```bash
+python -m differometor.rust_kernel.build
+```
+
 For reproducible measurements, numerical checks and the five-bar plot, use the full benchmark:
 
 ```bash

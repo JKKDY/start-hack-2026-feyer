@@ -22,13 +22,22 @@ struct Factors {
     }
 };
 
+extern "C" void* optical_prepare(int n, int nz, doublecomplex* data, int* rows, int* ptr) {
+    SuperMatrix a{};
+    zCreate_CompCol_Matrix(&a, n, n, nz, data, rows, ptr, SLU_NC, SLU_Z, SLU_GE);
+    auto* order = new int[n];
+    get_perm_c(COLAMD, &a, order);
+    Destroy_SuperMatrix_Store(&a);
+    return order;
+}
+extern "C" void optical_finish(int* order) { delete[] order; }
+
 extern "C" void* optical_factor(int n, int nz, doublecomplex* data, int* rows,
-                                int* ptr, int* ordering, bool prepare) {
+                                int* ptr, int* ordering) {
     auto* factors = new Factors(n);
     zCreate_CompCol_Matrix(&factors->a, n, n, nz, data, rows, ptr, SLU_NC, SLU_Z, SLU_GE);
     superlu_options_t options;
     set_default_options(&options);
-    if (prepare) get_perm_c(COLAMD, &factors->a, ordering);
     // SuperLU may postorder its permutation. Preserve the original for the next frequency.
     std::copy(ordering, ordering + n, factors->columns.begin());
     options.ColPerm = MY_PERMC;

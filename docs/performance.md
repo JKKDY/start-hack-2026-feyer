@@ -304,6 +304,27 @@ PYTHONPATH=. JAX_PLATFORMS=cpu python -m unittest discover -s tests
 
 On Linux run `python benchmark.py --cpus 1` inside a container pinned to a single allowed CPU. Apply the same Python environment and each revision's own native build to the control. The Rust sparse solver is optional and requires a compatible system SuperLU installation.
 
+### KLU for circuit-like optical systems
+
+The local branch `experiment/circuit-sparse-sweep` starts at the packed Rust control `e1015a9`. Its new installation-time option uses SuiteSparse KLU to decompose and order the runtime CSC pattern once per forward or reverse frequency sweep. Signal and detector systems share a pivoted complex128 numerical factorization within each frequency. Numeric pivots are selected again at the next frequency. Both residual refinement steps still run for direct, transpose and conjugate solves. All analysis, loading, forward fields and reverse gradients are inside the scorer. Install SuiteSparse headers before building the generic Rust kernel to enable KLU. The SuperLU and SciPy alternatives remain available.
+
+The second change simplifies the two-sideband layout builder. It expands each component's small index lists once in their original write order, including RHS writes and repeated destinations. A direct comparison found exactly equal setup matrices, instructions and metadata. Sixteen interleaved construction measurements on the same M1 process gave 8.70 ms for the control and 5.83 ms for the new builder. These isolated measurements are separate from the official totals.
+
+Fresh processes alternated control and candidate, reversing order every pair. Each ran the unchanged benchmark and all ten warm repeats. The Mac used normal scheduling on the 8-logical-CPU M1, 16 GiB, macOS 26.5.2. Linux used an ARM64 LinuxKit VM on that machine, restricted to CPU 0 with no container memory cap. Both used Python 3.12.16 and JAX/jaxlib 0.9.0. The target Intel Xeon Platinum 8468 was unavailable.
+
+| Platform | Revision | First run | Setup | Optical build within setup | Trace and compile | Warm |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| mac | base | 0.7135 | 0.4052 | 0.0561 | 0.1459 | 0.1601 |
+| mac | final | 0.5563 | 0.3564 | 0.0499 | 0.1147 | 0.0784 |
+| linux | base | 0.7946 | 0.2816 | 0.0565 | 0.1515 | 0.2824 |
+| linux | final | 0.5465 | 0.2604 | 0.0461 | 0.1338 | 0.1382 |
+
+The initial KLU-only development launch on the Mac took 2.580 s, with 2.051 s in setup, 0.442 s tracing/compiling and 0.078 s warm. The five final candidate totals on the Mac were 0.509, 0.574, 0.556, 0.830 and 0.556 s. Linux recorded 0.579, 0.601, 0.520, 0.523 and 0.547 s. Each candidate beat its paired control. The generic build took 9.623 s on macOS and 8.918 s on Linux. Compiler flags and the JAX differentiation adapter were unchanged.
+
+All 13 reference cases passed at all five parameter points on both platforms, as did all seven unit tests. On the scored fixture all gradient and reference checks passed. Comparing nominal and perturbed physical outputs with the control gave identical carrier and powers. The worst relative L2 differences over both machines were 3.60e-10 for signal, 2.73e-10 for noise, 5.79e-11 for sensitivity and 1.18e-9 for the full gradient. The maximum absolute loss difference was 5.42e-12. The near-null Voyager FM harness case still has wide published tolerances. Its worst sensitivity and gradient errors were 0.0663 and 0.00144 on the Mac, and 0.846 and 0.924 on Linux. A separate two-frequency complex test exercised both the KLU and SuperLU bridges with multiple RHS and all transpose modes.
+
+Follow the installation steps above using `brew install suite-sparse` or `apt install libsuitesparse-dev`, then run `python -m differometor.rust_kernel.build`. The Mac command is `python benchmark.py`. On Linux use `python benchmark.py --cpus 1`. The independent final Mac confirmation from the real checkout took 0.833 s.
+
 ## Benchmarking further changes
 
 For a quick cold-start measurement, run `python benchmark_slim.py` in a fresh process. The [slim runner](../benchmark_slim.py) uses the public UIFO fixture and the scored benchmark's forward, readout and gradient functions. Its single wall-clock time includes imports, CPU initialization, setup, JIT and transfer of the results back to the host. Use `benchmark.py` for the scored result, correctness checks, warm repeats and per-phase timings.

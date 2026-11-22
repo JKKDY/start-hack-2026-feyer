@@ -21,6 +21,7 @@ def kernel_path():
         "src/lib.rs",
         "src/sparse.rs",
         "sparse_bridge.cc",
+        "klu_bridge.cc",
         "../components.py",
         "../native_coefficients.py",
         "../_rust_sweep.py",

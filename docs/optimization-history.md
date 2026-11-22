@@ -8,8 +8,8 @@ Measured on 22 November 2026. Machine: Intel Core i7-11370H laptop (16 GB RAM), 
 
 | Milestone | Commit | Setup | Compile | Forward | Sensitivity | Gradient | Full first run (range) | Without setup | Warm median | Check (max log error) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| Original dense JAX solver | `3b538f0` | not run in WSL (memory), see the Windows table | | | | | | | | |
-| Dense JAX: one fewer noise solve, grouped components, detector selections without tiling | `089afa2` | not run in WSL (memory), see the Windows table | | | | | | | | |
+| Original dense JAX solver (**Windows**‡) | `3b538f0` | 2.025 | 26.049 | 13.938 | 0.0033 | 18.305 | **60.338** (1 run) | 58.313 | 15.119 | PASS (5.38e-06) |
+| Dense JAX: one fewer noise solve, grouped components, detector selections without tiling (**Windows**‡) | `089afa2` | 1.951 | 14.123 | 9.597 | 0.0020 | 2.287 | **27.960** (1 run) | 26.009 | 11.987 | PASS (5.38e-06) |
 | Packed sparse signal + noise solver (JAX JIT)† | `47cc00a` | 1.790 | 10.771 | 0.120 | 0.0007 | 0.103 | **12.786** (1 run) | 10.996 | 0.175 | PASS (5.37e-06) |
 | + static index arrays, refined sparse solves, NumPy build step, folded fixed parameters | `2960b9e` | 0.359 | 7.278 | 0.154 | 0.0009 | 0.129 | **7.921** (7.92–8.83) | 7.562 | 0.243 | PASS (5.37e-06) |
 | AOT branch: C++ component kernels, JAX glue | `2e61add` | 0.374 | 0.548 | 0.121 | 0.0010 | 0.153 | **1.198** (1.20–1.70) | 0.823 | 0.242 | PASS (5.37e-06) |
@@ -31,15 +31,17 @@ Columns:
 - **Without setup**: full first run minus setup.
 - **Warm median**: median of the three warm repeats.
 
+‡ Measured natively on Windows, not in WSL: the original dense solver peaks at about 14 GB and the WSL VM has 7 GB. See [Results on native Windows](#results-on-native-windows-1-cpu-for-the-dense-solver) for the setup. Windows setup is up to about 1 s slower than WSL (imports and build), so these two rows overstate setup by up to that much compared with the WSL rows; the other phases are comparable (`2960b9e`: 7.9 s compile on Windows, 7.3 s in WSL).
+
 † At `47cc00a` the packed solver was selected by that commit's own `benchmark.py` (a new `--signal-solver packed` default). With the original `benchmark.py` the library still used the dense solver there, and a run measured dense timings (27.7 s first run, 11.8 s warm on Windows). The library itself defaulted to packed only from the next milestone on. This row therefore runs the commit's own `benchmark.py`, which has the same workload and validation.
 
 \* The last three rows are not the scored benchmark. They run `benchmark_native.py` from that commit's own tree: a copy of `benchmark.py` that never imports JAX, calls the native engine directly, and computes the readout and its VJP in NumPy. It keeps the same validation and report format, with compile phases recorded as 0 s. At `f7be1dc` it is 0.32 s faster than the scored benchmark: about 0.19 s of setup (almost all `import jax`) and 0.13 s of compilation. Forward and gradient run the same native code in both.
 
 The raw reports are in [`benchmarks/history/results-wsl/`](../benchmarks/history/results-wsl/).
 
-### Results on native Windows (1 CPU), including the original solver
+### Results on native Windows (1 CPU) for the dense solver
 
-The original dense solver peaks at about 14 GB, more than the 7 GB WSL VM, so the Linux OOM killer stopped it there. These rows ran natively on Windows on the same laptop (Windows 10, Python 3.12.10, JAX and JAXLIB 0.9.0), with WSL shut down and other applications closed. Each ran once with `run_windows.ps1`: pinned with `start /affinity 1`, numerical libraries limited to one thread, and `benchmark.py --repeats 3` (Windows cannot use `--cpus`). The last two rows overlap with the WSL table so the platforms can be compared: Windows is slower mainly in setup (imports and build, about 1 s against 0.3 s).
+The original dense solver peaks at about 14 GB, more than the 7 GB WSL VM, so the Linux OOM killer stopped it there. These rows ran natively on Windows on the same laptop (Windows 10, Python 3.12.10, JAX and JAXLIB 0.9.0), with WSL shut down and other applications closed. Each ran once with `run_windows.ps1`: pinned with `start /affinity 1`, numerical libraries limited to one thread, and `benchmark.py --repeats 3` (Windows cannot use `--cpus`). The packed-sparse and baseline-optimized rows overlap with the WSL table so the platforms can be compared: Windows is slower mainly in setup (imports and build, about 1–2 s against 0.4–1.8 s). Native C++ milestones are not quoted on Windows: the MSVC build of the engine is slower than the gcc build, so the WSL rows are the reference for them.
 
 | Milestone | Commit | Setup | Compile | Forward | Sensitivity | Gradient | Full first run | Without setup | Warm median | Check (max log error) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
@@ -47,7 +49,6 @@ The original dense solver peaks at about 14 GB, more than the 7 GB WSL VM, so th
 | Dense JAX: one fewer noise solve, grouped components, detector selections without tiling | `089afa2` | 1.951 | 14.123 | 9.597 | 0.0020 | 2.287 | **27.960** | 26.009 | 11.987 | PASS (5.38e-06) |
 | Packed sparse signal + noise solver (JAX JIT)† | `47cc00a` | 2.041 | 12.287 | 0.120 | 0.0008 | 0.107 | **14.556** | 12.515 | 0.228 | PASS (5.37e-06) |
 | + static index arrays, refined sparse solves, NumPy build step, folded fixed parameters | `2960b9e` | 1.117 | 7.908 | 0.150 | 0.0009 | 0.135 | **9.311** | 8.194 | 0.296 | PASS (5.37e-06) |
-| Current native C++ engine (`f7be1dc`, as in the WSL table's `m9` row) | `f7be1dc` | 1.046 | 0.167 | 0.096 | 0.0007 | 0.024 | **1.334** | 0.288 | 0.126 | PASS (5.37e-06) |
 
 The raw reports are in [`benchmarks/history/results-windows/`](../benchmarks/history/results-windows/). For reference, the official baseline of the original solver on the scoring machine (Xeon Platinum 8468, 1 CPU, [cpu-baseline.json](../benchmarks/cpu-baseline.json)) took 44.204 s: setup 3.661, compile 22.918, forward 13.288, gradient 4.336, warm 17.679.
 
@@ -102,7 +103,7 @@ PYTHON=~/dfm-venv/bin/python benchmarks/history/run_linux.sh m3 m9      # only s
 On Windows:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File benchmarks\history\run_windows.ps1 -Python D:\Dev\start-hack-munich-2026\.venv\benchmark-local\windows-env\Scripts\python.exe -Only m0,m1,m2,m3,m9 -Runs 1
+powershell -ExecutionPolicy Bypass -File benchmarks\history\run_windows.ps1 -Python D:\Dev\start-hack-munich-2026\.venv\benchmark-local\windows-env\Scripts\python.exe -Only m0,m1,m2,m3 -Runs 1
 ```
 
 Native milestones use the `differometor-native` already installed in that environment unless `-BuildNative` is given; that option builds with MSVC via `uv pip install`. For `m0` and `m1` on a 16 GB machine, run `wsl --shutdown` and close large applications first. The runner limits OpenMP, OpenBLAS, MKL and NumExpr to one thread, as `benchmark.py --cpus 1` does on Linux. A run that exceeds `-TimeoutMinutes` (default 25) is killed.

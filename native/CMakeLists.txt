@@ -44,6 +44,7 @@ include(cmake/Dependencies.cmake)
 add_library(dfm_core
   src/version.cpp
   src/sparse_lu.cpp
+  src/native_lu.cpp
   src/ad_eigen.cpp
   src/ad_sparse_solve.cpp
   src/setup_spec.cpp
@@ -103,6 +104,8 @@ endif()
 if(DFM_BUILD_BENCH)
   add_executable(dfm_bench_ad bench/bench_ad.cpp)
   target_link_libraries(dfm_bench_ad PRIVATE dfm::core)
+  add_executable(dfm_bench_factor bench/bench_factor.cpp)
+  target_link_libraries(dfm_bench_factor PRIVATE dfm_core superlu Eigen3::Eigen)
 endif()
 
 # ------------------------------------------------------- Python bindings

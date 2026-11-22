@@ -160,7 +160,7 @@ RecordedSystem record(const SimulationPlan& plan, SystemKind kind, const std::ve
   std::vector<int> sweep_slot(resolved.size(), -1);
   std::vector<const ActiveReal*> pointers;
   std::vector<ActiveReal> kernel_out(t.functions.size() * 2 * kComponentOutputs);
-  std::vector<ActiveReal> group_out;
+  std::vector<ActiveReal*> out_pointers;
 
   for (Index b = 0; b < batch; ++b) {
     std::fill(sweep_slot.begin(), sweep_slot.end(), -1);
@@ -177,18 +177,16 @@ RecordedSystem record(const SimulationPlan& plan, SystemKind kind, const std::ve
       const auto& rows = l.rows_by_function[static_cast<std::size_t>(f)];
       if (rows.empty()) continue;
       pointers.resize(rows.size() * kComponentInputWidth);
-      group_out.resize(rows.size() * 2 * kComponentOutputs);
+      out_pointers.resize(rows.size());
       for (std::size_t e = 0; e < rows.size(); ++e) {
         const auto& idx = t.inputs[static_cast<std::size_t>(rows[e])];
         for (int k = 0; k < kComponentInputWidth; ++k) pointers[e * kComponentInputWidth + k] = param(idx[k]);
       }
-      record_components_indirect(static_cast<ComponentFunction>(f), static_cast<Index>(rows.size()), pointers.data(),
-                                 group_out.data());
       for (std::size_t e = 0; e < rows.size(); ++e) {
-        for (int r = 0; r < 2 * kComponentOutputs; ++r) {
-          kernel_out[static_cast<std::size_t>(rows[e]) * 2 * kComponentOutputs + r] = group_out[e * 2 * kComponentOutputs + r];
-        }
+        out_pointers[e] = kernel_out.data() + static_cast<std::size_t>(rows[e]) * 2 * kComponentOutputs;
       }
+      record_components_indirect(static_cast<ComponentFunction>(f), static_cast<Index>(rows.size()), pointers.data(),
+                                 out_pointers.data());
     }
 
     ActiveReal* values = out.values.data() + b * 2 * nnz;

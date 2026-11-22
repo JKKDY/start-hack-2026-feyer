@@ -38,12 +38,18 @@ enum class Op : int {
 /// stays valid even after this object is destroyed.
 class RecordedLinearSystem {
  public:
-  /// `values` points at 2 * nnz interleaved active reals. They are copied
-  /// (as active handles), so the caller's storage may be released.
+  /// `values` points at 2 * nnz interleaved active reals. They are BORROWED,
+  /// not copied (a copy would add one tape statement per value): the
+  /// storage must stay alive and unchanged until the last solve() call has
+  /// been recorded. The recorded tape entries do not need it afterwards.
   RecordedLinearSystem(SparsePatternPtr pattern, const ActiveReal* values, LUOptions options = {});
 
   const SparsePattern& pattern() const noexcept { return *pattern_; }
   const ComplexSparseLU& lu() const noexcept { return *lu_; }
+  const std::shared_ptr<const ComplexSparseLU>& shared_lu() const noexcept { return lu_; }
+  const SparsePatternPtr& shared_pattern() const noexcept { return pattern_; }
+  /// The borrowed active values (2 * nnz interleaved).
+  const ActiveReal* values() const noexcept { return values_; }
 
   /// Records X = op(A)^{-1} B. `b` and `x` hold 2 * n * m active reals
   /// (column-major, interleaved). `x` may not alias `b`.
@@ -52,11 +58,27 @@ class RecordedLinearSystem {
  private:
   SparsePatternPtr pattern_;
   std::shared_ptr<const ComplexSparseLU> lu_;
-  std::vector<ActiveReal> values_;
+  const ActiveReal* values_ = nullptr;
 };
 
 /// Records Y = op(A) B with active A values and active B (same layouts).
 void sparse_matmul_recorded(const SparsePatternPtr& pattern, const ActiveReal* values, const ActiveReal* b,
                             int m, Op op, ActiveReal* y);
+
+/// Records one frequency's signal solve and noise chain as ONE tape entry:
+///
+///   y = A^{-1} b            (b: n x 1)
+///   c = A^{-1} V A^{-H} s   (s: n x m, V on its own pattern)
+///
+/// Same results as system.solve(b), system.solve(s, ConjugateTranspose),
+/// sparse_matmul_recorded(V) and system.solve(u), but A's and V's values are
+/// registered once instead of three times and the intermediates w = A^{-H} s
+/// and u = V w are not tape variables. Reverse rule (cotangents ybar, cbar):
+///
+///   [bbar, ubar] = A^{-H} [ybar, cbar]
+///   Vbar = ubar w^H,   wbar = V^H ubar,   sbar = A^{-1} wbar
+///   Abar = -(bbar y^H + ubar c^H + w sbar^H)          (on occupied slots)
+void record_signal_noise(const RecordedLinearSystem& system, const ActiveReal* b, const SparsePatternPtr& v_pattern,
+                         const ActiveReal* v_values, const ActiveReal* s, int m, ActiveReal* y, ActiveReal* c);
 
 }  // namespace dfm

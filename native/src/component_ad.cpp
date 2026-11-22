@@ -12,8 +12,8 @@ using PushHelper = codi::StatementPushHelper<ActiveReal>;
 
 // `input(e, k)` returns the k-th active input of entry e by reference, so
 // inputs are read in place (no copies, hence no copy statements).
-template <ComponentFunction F, class Input>
-void record_batch(Index count, Input&& input, ActiveReal* out) {
+template <ComponentFunction F, class Input, class Output>
+void record_batch(Index count, Input&& input, Output&& output) {
   constexpr int K = arity(F);
   constexpr int KJ = K > 0 ? K : 1;
   const bool recording = ActiveReal::getTape().isActive();
@@ -21,7 +21,7 @@ void record_batch(Index count, Input&& input, ActiveReal* out) {
 
   for (Index e = 0; e < count; ++e) {
     auto in = [&](int k) -> const ActiveReal& { return input(e, k); };
-    ActiveReal* y = out + e * 2 * kComponentOutputs;
+    ActiveReal* y = output(e);
 
     bool any_active = false;
     if constexpr (K > 0) {
@@ -58,8 +58,8 @@ void record_batch(Index count, Input&& input, ActiveReal* out) {
   }
 }
 
-template <class Input>
-void record_dispatch(ComponentFunction f, Index count, Input&& input, ActiveReal* out) {
+template <class Input, class Output>
+void record_dispatch(ComponentFunction f, Index count, Input&& input, Output&& out) {
   switch (f) {
 #define DFM_CASE(NAME)   case CF::NAME:           return record_batch<CF::NAME>(count, input, out);
     DFM_CASE(ForceCalculationRight)
@@ -90,12 +90,21 @@ void record_dispatch(ComponentFunction f, Index count, Input&& input, ActiveReal
 
 void record_components(ComponentFunction f, Index count, const ActiveReal* params, Index stride, ActiveReal* out) {
   record_dispatch(
-      f, count, [params, stride](Index e, int k) -> const ActiveReal& { return params[e * stride + k]; }, out);
+      f, count, [params, stride](Index e, int k) -> const ActiveReal& { return params[e * stride + k]; },
+      [out](Index e) { return out + e * 2 * kComponentOutputs; });
 }
 
 void record_components_indirect(ComponentFunction f, Index count, const ActiveReal* const* inputs, ActiveReal* out) {
   record_dispatch(
-      f, count, [inputs](Index e, int k) -> const ActiveReal& { return *inputs[e * kComponentInputWidth + k]; }, out);
+      f, count, [inputs](Index e, int k) -> const ActiveReal& { return *inputs[e * kComponentInputWidth + k]; },
+      [out](Index e) { return out + e * 2 * kComponentOutputs; });
+}
+
+void record_components_indirect(ComponentFunction f, Index count, const ActiveReal* const* inputs,
+                                ActiveReal* const* outputs) {
+  record_dispatch(
+      f, count, [inputs](Index e, int k) -> const ActiveReal& { return *inputs[e * kComponentInputWidth + k]; },
+      [outputs](Index e) { return outputs[e]; });
 }
 
 }  // namespace dfm

@@ -23,10 +23,13 @@ struct LUOptions {
 
 using SparseMatrixC = Eigen::SparseMatrix<Complex, Eigen::ColMajor, int>;
 
-/// Sparse LU factorisation of a complex square matrix, backed by SuperLU.
+/// Sparse LU factorisation of a complex square matrix.
 ///
 /// The matrix is factorised once (pivoted LU with a fill-reducing column
-/// ordering). The factors are then reused for every solve:
+/// ordering). With the default COLAMD ordering this uses the native
+/// left-looking factorisation (src/native_lu.hpp; DFM_LU_BACKEND=superlu at
+/// run time selects SuperLU instead); natural ordering uses SuperLU. The
+/// factors are then reused for every solve:
 ///   * solve(b)                     -> x with A x = b
 ///   * solve_conjugate_transpose(b) -> x with A^H x = b
 /// The second one is what the adjoint pass needs, so the adjoint never

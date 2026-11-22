@@ -3,10 +3,14 @@
 #include <slu_zdefs.h>
 
 #include "dfm/sparse.hpp"
+#include "native_lu.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -49,6 +53,12 @@ struct ComplexSparseLU::Impl {
   std::vector<Complex> rhs_copy, residual;  ///< refinement work buffers
   int refinement_steps = 2;
 
+  // Native left-looking factors (native_lu.hpp), used instead of SuperLU's
+  // when `native` is set.
+  bool native = false;
+  native_lu::Factors factors;
+  std::vector<Complex> perm_work;
+
   ~Impl() {
     if (factors_allocated) {
       Destroy_SuperNode_Matrix(&L);
@@ -57,6 +67,11 @@ struct ComplexSparseLU::Impl {
   }
 
   void triangular_solve(Complex* x, int nrhs, trans_t trans) {
+    if (native) {
+      perm_work.resize(static_cast<std::size_t>(n));
+      native_lu::solve(factors, x, nrhs, trans != NOTRANS, perm_work.data());
+      return;
+    }
     SuperMatrix bmat;
     zCreate_Dense_Matrix(&bmat, n, nrhs, reinterpret_cast<doublecomplex*>(x), n, SLU_DN, SLU_Z, SLU_GE);
     SuperLUStat_t stat;
@@ -108,8 +123,10 @@ struct ComplexSparseLU::Impl {
     const std::vector<double>& pre = trans == NOTRANS ? row_scale : col_scale;
     const std::vector<double>& post = trans == NOTRANS ? col_scale : row_scale;
     const std::size_t total = static_cast<std::size_t>(n) * nrhs;
-    for (int c = 0; c < nrhs; ++c) {
-      for (int i = 0; i < n; ++i) x[static_cast<std::size_t>(c) * n + i] *= pre[static_cast<std::size_t>(i)];
+    if (DFM_EQUILIBRATE) {
+      for (int c = 0; c < nrhs; ++c) {
+        for (int i = 0; i < n; ++i) x[static_cast<std::size_t>(c) * n + i] *= pre[static_cast<std::size_t>(i)];
+      }
     }
     rhs_copy.assign(x, x + total);
     residual.resize(total);
@@ -119,8 +136,10 @@ struct ComplexSparseLU::Impl {
       triangular_solve(residual.data(), nrhs, trans);
       for (std::size_t k = 0; k < total; ++k) x[k] += residual[k];
     }
-    for (int c = 0; c < nrhs; ++c) {
-      for (int i = 0; i < n; ++i) x[static_cast<std::size_t>(c) * n + i] *= post[static_cast<std::size_t>(i)];
+    if (DFM_EQUILIBRATE) {
+      for (int c = 0; c < nrhs; ++c) {
+        for (int i = 0; i < n; ++i) x[static_cast<std::size_t>(c) * n + i] *= post[static_cast<std::size_t>(i)];
+      }
     }
   }
 };
@@ -131,6 +150,16 @@ namespace {
 double power_of_two_reciprocal(double max_abs) {
   if (!(max_abs > 0.0) || !std::isfinite(max_abs)) return 1.0;
   return std::ldexp(1.0, -std::ilogb(max_abs));
+}
+
+// Backend choice, read once: DFM_LU_BACKEND=superlu forces SuperLU for
+// fill-reducing (COLAMD) factorisations too; the default is the native one.
+bool use_native_backend() {
+  static const bool native = [] {
+    const char* v = std::getenv("DFM_LU_BACKEND");
+    return !(v != nullptr && std::string(v) == "superlu");
+  }();
+  return native;
 }
 
 }  // namespace
@@ -172,20 +201,29 @@ void ComplexSparseLU::factorize(int n, int nnz, const int* colptr, const int* ro
   m.colptr.assign(colptr, colptr + n + 1);
   m.rowind.assign(rowind, rowind + nnz);
   m.scaled.assign(values, values + nnz);
-  std::vector<double> row_max(static_cast<std::size_t>(n), 0.0);
-  for (int s = 0; s < nnz; ++s) {
-    double& r = row_max[static_cast<std::size_t>(m.rowind[s])];
-    r = std::max(r, std::abs(m.scaled[s]));
+  m.row_scale.assign(static_cast<std::size_t>(n), 1.0);
+  m.col_scale.assign(static_cast<std::size_t>(n), 1.0);
+  if (DFM_EQUILIBRATE) {
+    std::vector<double> row_max(static_cast<std::size_t>(n), 0.0);
+    for (int s = 0; s < nnz; ++s) {
+      double& r = row_max[static_cast<std::size_t>(m.rowind[s])];
+      r = std::max(r, std::abs(m.scaled[s]));
+    }
+    for (int i = 0; i < n; ++i) m.row_scale[i] = power_of_two_reciprocal(row_max[i]);
+    for (int s = 0; s < nnz; ++s) m.scaled[s] *= m.row_scale[static_cast<std::size_t>(m.rowind[s])];
+    for (int j = 0; j < n; ++j) {
+      double col_max = 0.0;
+      for (int s = m.colptr[j]; s < m.colptr[j + 1]; ++s) col_max = std::max(col_max, std::abs(m.scaled[s]));
+      m.col_scale[j] = power_of_two_reciprocal(col_max);
+      for (int s = m.colptr[j]; s < m.colptr[j + 1]; ++s) m.scaled[s] *= m.col_scale[j];
+    }
   }
-  m.row_scale.resize(static_cast<std::size_t>(n));
-  for (int i = 0; i < n; ++i) m.row_scale[i] = DFM_EQUILIBRATE ? power_of_two_reciprocal(row_max[i]) : 1.0;
-  for (int s = 0; s < nnz; ++s) m.scaled[s] *= m.row_scale[static_cast<std::size_t>(m.rowind[s])];
-  m.col_scale.resize(static_cast<std::size_t>(n));
-  for (int j = 0; j < n; ++j) {
-    double col_max = 0.0;
-    for (int s = m.colptr[j]; s < m.colptr[j + 1]; ++s) col_max = std::max(col_max, std::abs(m.scaled[s]));
-    m.col_scale[j] = DFM_EQUILIBRATE ? power_of_two_reciprocal(col_max) : 1.0;
-    for (int s = m.colptr[j]; s < m.colptr[j + 1]; ++s) m.scaled[s] *= m.col_scale[j];
+
+  if (!lu_options.natural_ordering && use_native_backend()) {
+    native_lu::factor(n, m.colptr.data(), m.rowind.data(), m.scaled.data(),
+                      native_lu::column_order(n, nnz, m.colptr.data(), m.rowind.data()), m.factors);
+    m.native = true;
+    return;
   }
 
   SuperMatrix amat;

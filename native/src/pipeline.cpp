@@ -3,6 +3,7 @@
 #include <codi.hpp>
 
 #include <cmath>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -10,6 +11,7 @@
 #include "dfm/constants.hpp"
 #include "dfm/errors.hpp"
 #include "dfm/plan_internals.hpp"
+#include "dfm/profile.hpp"
 #include "dfm/sparse.hpp"
 #include "dfm/sparse_ad.hpp"
 #include "dfm/sparse_lu.hpp"
@@ -131,22 +133,27 @@ RecordedOutputs simulate_recorded(const SimulationPlan& plan, const ActiveReal* 
   const int n = static_cast<int>(d.signal_variables);
   const int qn = static_cast<int>(q_count);
 
-  const std::vector<ActiveReal> resolved = resolve_parameters_recorded(plan, x);
+  namespace pf = profile;
+  std::vector<ActiveReal> resolved;
+  { pf::Scope sc(pf::ResolveParameters); resolved = resolve_parameters_recorded(plan, x); }
 
   // 1. Carrier: one recorded solve per carrier value. carrier_fields is
   // (value, port) interleaved, as record_signal expects.
-  const RecordedSystem carrier_sys = record_carrier(plan, resolved);
+  RecordedSystem carrier_sys;
+  { pf::Scope sc(pf::CarrierAssembly); carrier_sys = record_carrier(plan, resolved); }
   const int carrier_nnz = carrier_sys.pattern->nnz();
   std::vector<ActiveReal> carrier_fields(static_cast<std::size_t>(cv) * 2 * s);
   for (Index c = 0; c < cv; ++c) {
+    pf::Scope sc(pf::CarrierSolve);
     RecordedLinearSystem system(carrier_sys.pattern, carrier_sys.values.data() + c * 2 * carrier_nnz, kCarrierLU);
     system.solve(carrier_sys.rhs.data() + c * 2 * s, 1, Op::Normal, carrier_fields.data() + c * 2 * s);
   }
 
-  const RecordedSystem signal_sys = record_signal(plan, resolved, carrier_fields.data());
+  RecordedSystem signal_sys;
+  { pf::Scope sc(pf::SignalAssembly); signal_sys = record_signal(plan, resolved, carrier_fields.data()); }
   const int signal_nnz = signal_sys.pattern->nnz();
   RecordedSystem noise_sys;
-  if (q_count > 0) noise_sys = record_noise(plan, resolved);
+  if (q_count > 0) { pf::Scope sc(pf::NoiseAssembly); noise_sys = record_noise(plan, resolved); }
   const int noise_nnz = q_count > 0 ? noise_sys.pattern->nnz() : 0;
 
   // QHD phase factors exp(i * radians(phase)) on the unswept parameters.
@@ -181,17 +188,28 @@ RecordedOutputs simulate_recorded(const SimulationPlan& plan, const ActiveReal* 
   out.noise.resize(static_cast<std::size_t>(q_count * batch));
 
   std::vector<ActiveReal> y(static_cast<std::size_t>(2 * n));
-  std::vector<ActiveReal> sel(static_cast<std::size_t>(2 * n * qn)), w(sel.size()), u(sel.size()), cov(sel.size());
+  std::vector<ActiveReal> sel(static_cast<std::size_t>(2 * n * qn)), cov(sel.size());
   for (Index b = 0; b < batch; ++b) {
+    std::optional<pf::Scope> sc1(std::in_place, pf::SignalFactor);
     RecordedLinearSystem system(signal_sys.pattern, signal_sys.values.data() + b * 2 * signal_nnz);
-    system.solve(signal_sys.rhs.data() + b * 2 * n, 1, Op::Normal, y.data());
-    for (int r = 0; r < n; ++r) {
-      out.signal[static_cast<std::size_t>(2 * (r * batch + b))] = y[static_cast<std::size_t>(2 * r)];
-      out.signal[static_cast<std::size_t>(2 * (r * batch + b) + 1)] = y[static_cast<std::size_t>(2 * r + 1)];
+    sc1.reset();
+    if (q_count == 0) {
+      pf::Scope sc(pf::SignalSolve);
+      system.solve(signal_sys.rhs.data() + b * 2 * n, 1, Op::Normal, y.data());
     }
-    if (q_count == 0) continue;
+    auto store_signal = [&] {
+      for (int r = 0; r < n; ++r) {
+        out.signal[static_cast<std::size_t>(2 * (r * batch + b))] = y[static_cast<std::size_t>(2 * r)];
+        out.signal[static_cast<std::size_t>(2 * (r * batch + b) + 1)] = y[static_cast<std::size_t>(2 * r + 1)];
+      }
+    };
+    if (q_count == 0) {
+      store_signal();
+      continue;
+    }
 
     // Carrier selection vectors s_q (column q, interleaved, column-major).
+    std::optional<pf::Scope> sc2(std::in_place, pf::Selection);
     const Index cb = cv > 1 ? b : 0;
     const ActiveReal* field = carrier_fields.data() + cb * 2 * s;
     for (int q = 0; q < qn; ++q) {
@@ -220,10 +238,15 @@ RecordedOutputs simulate_recorded(const SimulationPlan& plan, const ActiveReal* 
         }
       }
     }
-    system.solve(sel.data(), qn, Op::ConjugateTranspose, w.data());                      // w = M^{-H} s
-    sparse_matmul_recorded(noise_sys.pattern, noise_sys.values.data() + b * 2 * noise_nnz, w.data(), qn, Op::Normal,
-                           u.data());                                                     // u = V w
-    system.solve(u.data(), qn, Op::Normal, cov.data());                                  // c = M^{-1} u
+    sc2.reset();
+    {
+      // y = M^{-1} rhs and c = M^{-1} V M^{-H} s as one tape entry.
+      pf::Scope sc(pf::NoiseSolves);
+      record_signal_noise(system, signal_sys.rhs.data() + b * 2 * n, noise_sys.pattern,
+                          noise_sys.values.data() + b * 2 * noise_nnz, sel.data(), qn, y.data(), cov.data());
+    }
+    store_signal();
+    pf::Scope sc3(pf::NoiseReduction);
     for (int q = 0; q < qn; ++q) {
       ActiveReal total = 0.0;
       for (int i : support[static_cast<std::size_t>(q)]) {
@@ -233,6 +256,7 @@ RecordedOutputs simulate_recorded(const SimulationPlan& plan, const ActiveReal* 
       out.noise[static_cast<std::size_t>(q * batch + b)] = sqrt(kNoiseScale * total);
     }
   }
+  pf::report("recorded forward");
   return out;
 }
 

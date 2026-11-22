@@ -26,4 +26,9 @@ void record_components(ComponentFunction f, Index count, const ActiveReal* param
 /// without copying active values (copies would add tape statements).
 void record_components_indirect(ComponentFunction f, Index count, const ActiveReal* const* inputs, ActiveReal* out);
 
+/// Same, with output pointers: entry e writes its 8 reals to outputs[e]
+/// (lets batched kernels write straight into their final storage).
+void record_components_indirect(ComponentFunction f, Index count, const ActiveReal* const* inputs,
+                                ActiveReal* const* outputs);
+
 }  // namespace dfm

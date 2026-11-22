@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <iostream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -11,6 +12,7 @@
 
 #include "dfm/errors.hpp"
 #include "dfm/pipeline.hpp"
+#include "dfm/profile.hpp"
 
 namespace dfm {
 namespace {
@@ -123,6 +125,7 @@ std::pair<ForwardOutputs, std::unique_ptr<SimulationState>> Simulator::forward_w
   for (ActiveReal& v : data->outputs.signal) tape.registerOutput(v);
   for (ActiveReal& v : data->outputs.noise) tape.registerOutput(v);
   tape.setPassive();
+  if (profile::enabled()) tape.printStatistics(std::cerr);
 
   ForwardOutputs out;
   out.carrier.resize(d.carrier_ports, d.carrier_values);
@@ -171,7 +174,11 @@ VectorR Simulator::backward(const SimulationState& state, const OutputCotangents
   for (Index k = 0; k < ct.noise.size(); ++k) {
     outputs.noise[static_cast<std::size_t>(k)].setGradient(ct.noise.data()[k]);
   }
-  tape.evaluate();
+  {
+    profile::Scope sc(profile::TapeEvaluate);
+    tape.evaluate();
+  }
+  profile::report("backward");
 
   VectorR grad(static_cast<Index>(d.inputs.size()));
   for (std::size_t i = 0; i < d.inputs.size(); ++i) grad(static_cast<Index>(i)) = d.inputs[i].getGradient();

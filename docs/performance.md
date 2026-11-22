@@ -193,6 +193,29 @@ Both native runs passed the scored sensitivity and finite-difference gradient ch
 
 Build with `python -m pip install -e .` using a C++ compiler and set `DIFFEROMETOR_NATIVE=1` before starting the benchmark process. The generated C++ include is part of the source distribution. A clean source archive built and imported on Windows. Regenerate the include with `python profiling/generate_native_components.py` after editing the component formulas. The backend stays opt-in because warm execution is slower and the native adapter currently returns reverse-mode gradients for design parameters. The default path retains forward-mode and other differentiable inputs.
 
+#### Rust signal coefficients and CPU compiler flags
+
+Branch `test/aot-flags-kernel` starts from `2e61add`. We retained the existing low-latency CPU flags (`--xla_backend_optimization_level=0 --xla_cpu_use_fusion_emitters=false`) and adapted the Rust sweep from `ddec3a3` to the AOT host callback. Rust computes packed signal coefficients and their reverse derivative directly from contiguous buffers. It reuses intermediates that are constant across frequency, avoiding a second JAX dispatch. C++ handles other component groups and the existing multi-carrier fallback. The AOT backend retains the upstream reverse-mode design-parameter scope. The normal JAX path remains available for its wider differentiation API.
+
+The original benchmark ran three fresh processes per configuration and ten warm repeats per process. Both platforms used an Apple M1 host with 16 GiB RAM and eight logical CPUs, Python 3.12.16 and JAX/jaxlib 0.9.0. macOS 26.5.2 used default affinity. ARM64 Linux in Docker used one pinned CPU. These are local timings, with variability in imports and setup. Build time was measured separately, 6.8 s on macOS and 7.0 s on Linux for Rust with Cargo installed.
+
+| Platform and configuration | First run (s) | Setup (s) | Compilation (s) | Warm (s) |
+| --- | ---: | ---: | ---: | ---: |
+| Mac, default JAX before flags | 2.6167 | 0.3971 | 2.0382 | 0.1660 |
+| Mac, default JAX with flags | 1.6826 | 0.3737 | 1.1280 | 0.1738 |
+| Mac, earlier Rust branch | 1.4794 | 0.6879 | 0.6141 | 0.1811 |
+| Mac, original C++ AOT | 0.8572 | 0.3996 | 0.2520 | 0.1891 |
+| Mac, C++ AOT with flags | 0.7478 | 0.4237 | 0.1256 | 0.1933 |
+| Mac, Rust AOT with flags | 0.7030 | 0.3963 | 0.1211 | 0.1712 |
+| Linux, original C++ AOT | 1.0775 | 0.3191 | 0.4407 | 0.3038 |
+| Linux, C++ AOT with flags | 0.8192 | 0.3452 | 0.1625 | 0.3134 |
+| Linux, Rust AOT with flags | 0.7965 | 0.3213 | 0.1684 | 0.2876 |
+
+The scored benchmark passed in each final comparison. The Rust AOT backend passed all 13 reference setups at five parameter points on both platforms. The all-component unit test checks complex values and pullbacks with constant, partly varying and fully varying inputs. Worst reference-suite errors were in the existing near-null Voyager FM case, under its published tolerances. On macOS sensitivity and gradient errors were 0.0627 and 0.001463. On Linux sensitivity and gradient errors were 0.8453 and 0.9233.
+On the scored Mac input, the saved sensitivity, signal and noise arrays matched the C++ AOT values exactly. The relative L2 difference of the full gradient was 2.52e-20.
+
+With the pinned dependencies installed, build the C++ extension with `python -m pip install -e .` and the Rust library with `python -m differometor.rust_kernel.build` (Cargo on macOS or Linux). Run `DIFFEROMETOR_NATIVE=1 python benchmark.py`, adding `--cpus 1` on Linux. To reproduce flagged C++ set `DIFFEROMETOR_DISABLE_NATIVE=1` as well. To reproduce original C++ also set `DIFFEROMETOR_KEEP_XLA_FLAGS=1` with no external XLA flags.
+
 ## Benchmarking further changes
 
 For a quick cold-start measurement, run `python benchmark_slim.py` in a fresh process. The [slim runner](../benchmark_slim.py) uses the public UIFO fixture and the scored benchmark's forward, readout and gradient functions. Its single wall-clock time includes imports, CPU initialization, setup, JIT and transfer of the results back to the host. Use `benchmark.py` for the scored result, correctness checks, warm repeats and per-phase timings.

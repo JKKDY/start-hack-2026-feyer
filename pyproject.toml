@@ -22,3 +22,6 @@ Issues = "https://github.com/artificial-scientist-lab/Differometor/issues"
 where = ["."]
 include = ["differometor*"]
 exclude = ["examples/results", "media"]
+
+[tool.setuptools.package-data]
+"differometor.rust_kernel" = ["Cargo.toml", "Cargo.lock", "src/*.rs"]

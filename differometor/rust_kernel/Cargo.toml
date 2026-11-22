@@ -1,0 +1,14 @@
+[package]
+name = "optical_coefficients"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+num-complex = "=0.4.6"
+
+[profile.release]
+panic = "abort"

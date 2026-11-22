@@ -44,6 +44,8 @@ def coefficient_call(parameters, indices, kind, seed=None):
 
 
 def coefficients(parameters, instruction, cotangent=None, active_parameters=None):
+    if callable(instruction):
+        return instruction(parameters, cotangent)
     groups, permutation = instruction
     if cotangent is None:
         blocks = [
@@ -211,6 +213,18 @@ def host_reverse(plan, base, phases, carrier_sweep, signal_sweep, selection_temp
 
 def run(plan, base, phases, carrier_sweep, signal_sweep, carrier_template,
         signal_template, noise_template, selection_template):
+    from .rust_kernel import installed_kernel
+    library = installed_kernel()
+    groups, order = plan.signal_instruction
+    if library and any(group is not None for group in groups):
+        from ._rust_sweep import Sweep
+        varying = np.union1d(plan.carrier_parameters, plan.signal_parameters)
+        # Invariant cotangents may only be combined within one carrier sweep.
+        if carrier_sweep.shape[1] == 1 and all(
+            group is None or group[0].shape[1] == 7 for group in groups
+        ):
+            plan = plan._replace(signal_instruction=Sweep(
+                plan.signal_instruction, varying, base.shape[-1], library))
     nc = carrier_sweep.shape[1]
     nf = nc * signal_sweep.shape[1]
     n = carrier_template.shape[0]

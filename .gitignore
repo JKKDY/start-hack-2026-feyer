@@ -23,3 +23,6 @@ dump/
 xla_dump*/
 tests/.tmp/
 runs/*.log
+
+differometor/rust_kernel/.native/
+differometor/_native_components*.so

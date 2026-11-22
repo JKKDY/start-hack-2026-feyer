@@ -48,6 +48,18 @@ Of the remaining 0.51 s WSL first run of `benchmark.py`, about 0.12 s is native 
 
 **JAX-free variant.** `benchmark_native.py` is a copy of `benchmark.py` (which stays unchanged and scored) that never imports JAX. It calls the native engine directly and computes the readout and its VJP in NumPy. It keeps the same validation and report format, with the compile phases recorded as 0 s. On three pinned runs its first-run total was 0.257–0.270 s and its warm median 0.153–0.163 s. Its fields are identical to the bridge run of `benchmark.py`; the gradient differs by 3.6e-10 relative.
 
+**Second setup: aLIGO.** The organisers published `benchmark_aligo.py` (repository `feyerlabs/start-hack-munich-2026`, commit `83f8d2f`), which calls their updated `benchmark.py` with `setup_name="aligo"`: the public `setups.aligo(mode="space_modulation")` constructor with a hash-pinned optical input, 101 frequencies (20–5000 Hz), 29 independent design variables, a log-sensitivity tolerance of 1e-6 and a gradient spot check on `sq1.db`. Its UIFO path is unchanged. It must run from a folder without its own `differometor/` (copy `benchmark.py`, `benchmark_aligo.py` and `plot_timings.py` there) and with `--repo` pointing at this checkout; otherwise Python imports the organisers' original simulator and the benchmark refuses to run. `benchmark_native_aligo.py` is the matching JAX-free variant: a copy of `benchmark_native.py` with only the aLIGO setup, reference, tolerance, spot check and setup-hash check changed. It is illustrative, not scored.
+
+Measured on 22 November 2026 at `63a4c31` on a different machine from the Windows rows: Intel Core Ultra 7 255H, WSL2 Ubuntu 24.04, 1 CPU via `--cpus 1`, Python 3.12.3, JAX and jaxlib 0.9.0, `--repeats 3`.
+
+| aLIGO run (WSL laptop) | First incl. JIT (s) | JIT (s) | Warm (s) | Max log-sensitivity error |
+| --- | ---: | ---: | ---: | --- |
+| Original simulator, `benchmark_aligo.py` (2 runs) | 18.00, 17.80 | 16.79 (mean) | 0.102 | 9.2e-11 |
+| Native engine, `benchmark_aligo.py` (2 runs) | **0.424, 0.391** | 0.125 (mean) | 0.006 | 3.7e-11 |
+| Native engine, `benchmark_native_aligo.py` (3 runs) | 0.146, 0.153, 0.085 | 0 | 0.005–0.011 | 3.7e-11 |
+
+All runs passed, including the setup-hash and reference-hash checks and the `sq1.db` spot check (-0.0129066102543 native against -0.0129066102539 original). The organisers' published Xeon 8468 baseline for this benchmark is 25.31 s first run and 22.90 s JIT. Of the native engine's 0.41 s through `benchmark_aligo.py`, about 0.02 s is forward and gradient work; the rest is the JAX import and the three wrapper compiles.
+
 Making `differometor/sparse_signal.py` import `scipy.sparse` lazily (it is used only by the JAX packed solver) cut `import differometor` from 88 to 30 ms and the benchmark's import phase from 0.318 to 0.244 s. The repeat first run was 0.985 s, because the readout and gradient compiles vary by about ±0.05 s between single runs. The JAX packed path still passes (`aligo_space` harness case, `DIFFEROMETOR_BACKEND=jax`).
 
 The original row is the fresh local dense calibration. The repository's [published CPU baseline](../benchmarks/cpu-baseline.json) was measured on a different host and recorded 44.20 s first run, 22.92 s JIT, and 17.68 s warm. The fully packed prototype previously recorded 18.34 s first run and 0.248 s warm. The table uses its later verification run as the default.

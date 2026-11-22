@@ -6,8 +6,10 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 import numpy as np
-from scipy.sparse import csc_matrix
-from scipy.sparse.linalg import splu
+
+# scipy.sparse (~70 ms to import) is only needed when the JAX packed solver
+# actually factorises; it is imported inside _factor_and_solve so that
+# `import differometor` stays cheap (the default native backend never uses it).
 
 
 class PackedSignal(NamedTuple):
@@ -90,6 +92,9 @@ def _refine(solve, apply, rhs, solution):
 
 
 def _factor_and_solve(coefficients, rows, pointers, signal_rhs, detector_rhs, *, transpose):
+    from scipy.sparse import csc_matrix
+    from scipy.sparse.linalg import splu
+
     coefficients, rows, pointers, signal_rhs, detector_rhs = map(
         np.asarray, (coefficients, rows, pointers, signal_rhs, detector_rhs)
     )

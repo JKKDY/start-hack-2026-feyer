@@ -771,3 +771,36 @@ def run_setups(setups: list[Setup], frequencies: jnp.ndarray):
     for setup in setups:
         results.append(run(setup, [("f", "frequency")], frequencies))
     return results
+
+
+# ---------------------------------------------------------------------------
+# Backend selection. By default the public entry points run on the native C++
+# engine through the JAX bridge (differometor/native_bridge.py); set
+# DIFFEROMETOR_BACKEND=jax for the JAX implementation above. The JAX versions
+# stay available as *_jax.
+# ---------------------------------------------------------------------------
+run_build_step_jax = run_build_step
+run_simulation_step_jax = run_simulation_step
+simulate_jax = simulate
+
+
+def run_jax(setup, changing_pairs=None, changing_values=None, optimization_pairs=None):
+    """`run` on the JAX implementation, independent of the selected backend."""
+    simulation_arrays, *metadata = run_build_step_jax(setup, changing_pairs, changing_values, optimization_pairs)
+    simulation_function = simulate_jax
+    carrier, signal, noise = simulation_function(**simulation_arrays)
+    return carrier, signal, noise, *metadata
+
+
+def run_setups_jax(setups, frequencies):
+    """`run_setups` on the JAX implementation."""
+    return [run_jax(setup, [("f", "frequency")], frequencies) for setup in setups]
+
+from differometor import native_bridge as _native_bridge  # noqa: E402
+
+if _native_bridge.ENABLED:
+    run_build_step = _native_bridge.run_build_step
+    run_simulation_step = _native_bridge.run_simulation_step
+    simulate = _native_bridge.simulate
+    run = _native_bridge.run
+    run_setups = _native_bridge.run_setups

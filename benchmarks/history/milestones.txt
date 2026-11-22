@@ -1,13 +1,14 @@
 # Optimization milestones for run_linux.sh / run_windows.ps1 / make_table.py.
 # Format: label | commit | kind | extra environment (space separated) | description [| script]
 #   script: omitted -> the ORIGINAL benchmark.py from 3b538f0 (the scored benchmark);
-#           otherwise a script from the milestone's own tree, e.g. benchmark_native.py
+#           otherwise a script from the milestone's own tree, e.g. benchmark_native.py;
+#           benchmark_commit.py is the commit's own benchmark.py (saved before it is replaced)
 #   kind plain  : pure Python/JAX tree, nothing to build
 #   kind aot    : AOT branch; compiles differometor/_native_components.cpp in place
 #   kind native : C++ engine in native/; pip-installs native/ into the Python environment
 m0_original           | 3b538f0 | plain  |                                                                        | Original dense JAX solver
 m1_dense_tweaks       | 089afa2 | plain  |                                                                        | Dense JAX: one fewer noise solve, grouped components, detector selections without tiling
-m2_packed_sparse      | 47cc00a | plain  |                                                                        | Packed sparse signal + noise solver (JAX JIT)
+m2_packed_sparse      | 47cc00a | plain  |                                                                        | Packed sparse signal + noise solver (JAX JIT); selected by that commit's own benchmark.py | benchmark_commit.py
 m3_baseline_optimized | 2960b9e | plain  |                                                                        | + static index arrays, refined sparse solves, NumPy build step, folded fixed parameters
 m4_aot_components     | 2e61add | aot    | DIFFEROMETOR_NATIVE=1                                                  | AOT branch: C++ component kernels, JAX glue
 m5_aot_flags_lureuse  | 8072817 | aot    | DIFFEROMETOR_NATIVE=1 XLA_FLAGS=--xla_backend_optimization_level=0     | AOT branch: + XLA optimization level 0, LU reuse in reverse mode

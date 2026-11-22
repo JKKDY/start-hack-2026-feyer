@@ -28,6 +28,8 @@ param(
   [int]$TimeoutMinutes = 25,
   [switch]$BuildNative
 )
+# With `powershell -File`, "-Only m0,m1" arrives as one string: split it.
+$Only = @($Only | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repo = (git -C $here rev-parse --show-toplevel)
 $results = Join-Path $Work "results"
@@ -46,6 +48,7 @@ foreach ($line in Get-Content "$here\milestones.txt") {
   New-Item -ItemType Directory -Force $dir | Out-Null
   git -C $repo -c core.autocrlf=false archive --format=tar -o "$Work\$label.tar" $sha
   tar -xf "$Work\$label.tar" -C $dir
+  Copy-Item (Join-Path $dir "benchmark.py") (Join-Path $dir "benchmark_commit.py")   # the commit's own version, for rows that need it
   tar -xf "$Work\orig.tar" -C $dir   # original benchmark.py
   "=== $label ($sha, $kind, $script) env=[$envs]"
   if ($kind -eq "aot") {
@@ -57,7 +60,12 @@ foreach ($line in Get-Content "$here\milestones.txt") {
     if ($LASTEXITCODE -ne 0) { "  native build failed"; continue }
     $lastNative = $sha
   }
-  $setEnv = ($envs.Split(" ", [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { "set `"$_`" && " }) -join ""
+  # One thread per numerical library, as benchmark.py does itself with --cpus 1
+  # on Linux (and as the earlier pinned Windows runs did). Without this the
+  # libraries start one thread per core on the single pinned CPU.
+  $threadEnv = @("OMP_NUM_THREADS=1", "OPENBLAS_NUM_THREADS=1", "MKL_NUM_THREADS=1", "NUMEXPR_NUM_THREADS=1")
+  $allEnv = $threadEnv + $envs.Split(" ", [StringSplitOptions]::RemoveEmptyEntries)
+  $setEnv = ($allEnv | ForEach-Object { "set `"$_`" && " }) -join ""
   foreach ($run in 1..$Runs) {
     $log = "$results\$($label)_run$run.log"
     $cmd = "$setEnv start /affinity 1 /wait /b `"`" `"$Python`" $script --repeats 3 --output $results\$($label)_run$run.json > `"$log`" 2>&1"

@@ -52,6 +52,7 @@ while IFS='|' read -r label sha kind envs desc script; do
   dir="$WORK/$label"
   rm -rf "$dir" && mkdir -p "$dir"
   g archive "$sha" | tar -x -C "$dir"
+  cp "$dir/benchmark.py" "$dir/benchmark_commit.py"   # the commit's own version, for rows that need it
   cp "$WORK/benchmark.orig.py" "$dir/benchmark.py"
   [ "$(sha256sum "$dir/benchmark.py" | cut -d' ' -f1)" = "$ORIG_SHA" ] || { echo "benchmark.py mismatch"; exit 1; }
   echo "=== $label ($sha, $kind, $script) env=[$envs]"

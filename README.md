@@ -6,37 +6,27 @@ This repository includes the public simulator source, example data, [challenge P
 
 ## Start here
 
-Use **Python 3.12 on Linux or WSL2**, with **32 GB RAM recommended**. Clone the repository:
-
-```bash
-git clone https://github.com/feyerlabs/start-hack-munich-2026.git
-cd start-hack-munich-2026
-```
-
-Alternatively, [download the ZIP](https://github.com/feyerlabs/start-hack-munich-2026/archive/refs/heads/main.zip), unpack it and open a terminal in its root folder. Then install and run:
+From the extracted submission directory, use Python 3.12, Cargo, a C++17 compiler, and SuiteSparse development headers. On Debian or Ubuntu the native dependencies are provided by `cargo`, `g++` and `libsuitesparse-dev`. On Apple Silicon install SuiteSparse with `brew install suite-sparse`. Build the generic native code during installation.
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python -m pip install -e .
-python start_here.py
-```
-
-[`start_here.py`](start_here.py) walks through one complete simulation and gradient calculation in five steps. It prints setup time, compilation time, and combined simulation/sensitivity/gradient runtime. It runs once using the CPUs available to the process.
-
-For the fastest tested CPU configuration, install Cargo, a C++17 compiler, and the SuiteSparse development libraries before running the benchmark. On Debian or Ubuntu install `libsuitesparse-dev`. On macOS use `brew install suite-sparse`. After installing the editable Python package, build the generic native kernels once in the active environment.
-
-```bash
 python -m differometor.rust_kernel.build
 ```
 
-For reproducible measurements, numerical checks and the five-bar plot, use the full benchmark:
+Run the unchanged competition scorer on Linux in the single-logical-CPU allocation. It evaluates all 101 frequencies and all 193 design variables.
 
 ```bash
-python benchmark.py --cpus 1 --output benchmark-packed.json
+python benchmark.py --cpus 1
+python tests/check_general.py --suite all
+PYTHONPATH=. JAX_PLATFORMS=cpu python -m unittest discover -s tests
 ```
+
+On macOS use `python benchmark.py` for the ordinary unpinned run. The submission archive includes the before/after timing reports, plots and final verification under `submission-evidence/`.
+
+[`start_here.py`](start_here.py) walks through one complete simulation and gradient calculation in five steps. It prints setup time, compilation time, and combined simulation/sensitivity/gradient runtime. It runs once using the CPUs available to the process.
 
 `--cpus 1` pins the process to one logical CPU on Linux/WSL. The simulator defaults to packed sparse signal assembly and packed noise covariance, and the original benchmark calls it with those defaults. Use `--repeats 3` for a shorter run or `--save-arrays packed.npz` to save outputs. Check correctness beyond the scored fixture with `python tests/check_general.py --suite all` ([correctness harness](docs/correctness-harness.md)). A successful run prints `PASS` and writes the JSON report and timing plot. [Performance notes](docs/performance.md) describe the numerical comparisons and benchmark timings.
 
@@ -119,6 +109,6 @@ python plot_timings.py benchmark-baseline.json --output benchmark-baseline.png
 
 ## Public source and license
 
-The simulator is the unmodified public [Artificial Scientist Lab Differometor](https://github.com/artificial-scientist-lab/Differometor) at commit `b0dc7c79e7c72a1b010174f6bdcad01efa51d6ff`. This repository adds the Feyer hackathon brief and benchmarking tools. The full upstream instructions remain in [README.upstream.md](README.upstream.md); the upstream [MIT license](LICENSE) is retained.
+The submission optimizes the public [Artificial Scientist Lab Differometor](https://github.com/artificial-scientist-lab/Differometor) starting from commit `b0dc7c79e7c72a1b010174f6bdcad01efa51d6ff`. This repository adds the Feyer hackathon brief and benchmarking tools. The full upstream instructions remain in [README.upstream.md](README.upstream.md); the upstream [MIT license](LICENSE) is retained.
 
 [UPSTREAM.json](UPSTREAM.json) records the original simulator and fixture hashes.

@@ -346,6 +346,56 @@ The historical 2.580 s launch included 1.696 s in the scorer's combined build ph
 
 Both generality suites passed at all 65 points. Worst sensitivity/gradient harness errors remained in the known near-null Voyager case (0.0663/0.00144 on Mac and 0.846/0.924 on Linux). All seven physical outputs including loss and full gradient agreed exactly with the control at nominal and perturbed scored parameters on both systems. All 13 prepared layouts and metadata matched the control byte for byte with a fixed diagnostic hash seed. The original sensitivity and finite-difference checks passed. Reproduce with the KLU installation above and plain `python benchmark.py` on the Mac or `python benchmark.py --cpus 1` on Linux.
 
+### Ordered reverse accumulation and static index lowering
+
+The base is `d36925c`. The local experiment branch is `experiment/ordered-reverse-xeon`. Measurements were made on an 8-core Apple M1, 16 GiB, macOS 26.5.2 and a LinuxKit ARM64 VM pinned to CPU 0 with no container memory cap. Both used Python 3.12.16 and JAX/jaxlib 0.9.0. No native Xeon Platinum 8468 runner or 32 GB judging allocation was available. Nothing here qualifies as a measured Xeon winner.
+
+The first variant proves scatter destinations unique while permitting tied input design values. The second evaluates the ordered row and column covariance pullback in the native library, including the covariance cotangent. It keeps the NumPy fallback. The third disables negative-index normalization for static nonnegative indices, preserving the original gather for dynamic and NumPy inputs. In the forward StableHLO these two indexing changes together reduced two scatter instructions to one, six selects to zero and five comparisons to zero. Forward lowering was the most expensive individual compilation subphase in the initial instrumented Mac diagnostic. Native Rust builds took 6.906 seconds on the M1 and 7.662 seconds on Linux.
+
+Variant names are base (control), hint (unique destinations), rust (ordered kernel), both (hint and rust), norm (static nonnegative indices), hintsimple (both indexing changes), all (three changes). Each row reports median milliseconds in the unchanged benchmark over fresh processes with ten warm repeats. Phase medians are calculated independently.
+
+| Platform / variant | Launches | Total | Setup | Trace + compile | Forward | Sensitivity | Reverse | Host transfer | Warm |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Mac base | 10 | 454.51 | 285.67 | 95.80 | 34.89 | 0.35 | 38.14 | 0.12 | 67.12 |
+| Mac hint | 10 | 444.42 | 280.99 | 89.75 | 34.88 | 0.33 | 38.05 | 0.12 | 67.19 |
+| Mac rust | 5 | 453.46 | 278.75 | 100.02 | 35.33 | 0.36 | 38.15 | 0.12 | 66.60 |
+| Mac both | 10 | 446.45 | 281.39 | 90.81 | 35.03 | 0.34 | 38.30 | 0.12 | 66.71 |
+| Mac norm | 5 | 453.12 | 284.35 | 95.36 | 35.14 | 0.33 | 38.10 | 0.12 | 67.14 |
+| Mac hintsimple | 10 | 444.69 | 281.57 | 89.24 | 34.88 | 0.33 | 38.27 | 0.12 | 67.25 |
+| Mac all | 10 | 442.63 | 278.87 | 89.37 | 34.95 | 0.35 | 38.31 | 0.12 | 66.71 |
+| Linux base | 10 | 499.61 | 242.17 | 118.75 | 66.02 | 0.66 | 71.82 | 0.13 | 130.58 |
+| Linux hint | 10 | 490.26 | 239.69 | 108.19 | 64.92 | 0.68 | 71.93 | 0.13 | 132.22 |
+| Linux rust | 5 | 496.60 | 239.32 | 118.83 | 65.63 | 0.66 | 70.22 | 0.14 | 129.82 |
+| Linux both | 10 | 482.55 | 239.06 | 107.19 | 65.15 | 0.67 | 70.71 | 0.13 | 128.90 |
+| Linux norm | 5 | 495.50 | 238.22 | 117.48 | 65.87 | 0.66 | 70.76 | 0.13 | 129.58 |
+| Linux hintsimple | 10 | 483.47 | 240.81 | 105.59 | 65.25 | 0.67 | 71.66 | 0.14 | 130.77 |
+| Linux all | 10 | 499.30 | 251.03 | 108.34 | 65.63 | 0.68 | 71.61 | 0.13 | 128.55 |
+
+Matched first-run differences are candidate minus comparison, in milliseconds.
+
+| Comparison | M1 median difference | M1 wins | Linux median difference | Linux wins |
+|---|---:|---:|---:|---:|
+| base->hint | -5.47 | 9/10 | -10.31 | 7/10 |
+| base->rust | 0.78 | 2/5 | -1.70 | 3/5 |
+| hint->both | -0.10 | 5/10 | -3.60 | 8/10 |
+| base->norm | 2.03 | 2/5 | 2.48 | 2/5 |
+| hint->hintsimple | 0.32 | 5/10 | -3.45 | 7/10 |
+| both->all | -2.23 | 7/10 | 1.34 | 5/10 |
+| hintsimple->all | 1.96 | 4/10 | 0.74 | 5/10 |
+| base->all | -7.21 | 8/10 | -7.32 | 6/10 |
+
+The `submission/faster-physics` branch uses variant `both`, the proven unique-destination hint plus the Rust covariance kernel. Relative to the hint alone, the additions won 8 of 10 paired Linux totals, with a median difference of -3.60 ms. The Mac result split 5/10; its warm median improved by roughly 0.48 ms. The static nonnegative-index change alone lost 3 of 5 paired totals on both machines and had inconsistent effects on top of the retained combination. It is available as a separate patch only. The native Xeon performance gate remains pending.
+
+Maximum observed scorer-process RSS was M1 base 320.1 MiB, M1 both 318.4 MiB, Linux base 319.7 MiB, Linux both 317.5 MiB. Linux memory measurements cover the supplementary five pairs. The Rust change increased the M1 median first forward by 0.14 ms and first reverse by 0.16 ms versus control; the warm median fell by 0.41 ms. Linux candidate sensitivity increased by about 0.01 ms. Full per-phase differences are in the archived JSON.
+
+Scored covariance-block microbenchmarks on the original shapes took 0.69 ms in NumPy and 0.14 ms through Rust on M1, including dispatch and packing. The corresponding Linux measurements were 1.28 and 0.14 ms. The M1 instrumented control spent 0.070 ms gathering, 0.087 ms computing the covariance cotangent, 0.030 ms allocating the gradient buffer, 0.066 and 0.067 ms forming row and column products and 0.228 and 0.206 ms accumulating them. Removed work can account for at most about 0.17% of the M1 control total. Packing the actual contiguous inputs in isolation took 0.001 ms on M1.
+
+The complete combination and indexing-only combination passed all thirteen harness topologies at five parameter points per platform. Regression checks covered repeated and overlapping destinations, multiple detectors, strided arrays, empty axes, first and higher derivatives and pullback reuse. Nominal and perturbed scored outputs and losses were identical to control. The largest full gradient differences for the fused kernel were 1.892e-10 absolute and 3.198e-15 relative L2. Index-only variants matched the control exactly.
+
+To reproduce, install the pinned dependencies and editable repository using Python 3.12, a C++17 compiler, Cargo and SuiteSparse development headers. Run `python -m differometor.rust_kernel.build` during installation, then `python benchmark.py --cpus 1` on Linux. Run `python tests/check_general.py --suite all` and `PYTHONPATH=. JAX_PLATFORMS=cpu python -m unittest discover -s tests`. The separate raw archive includes every timed launch, subphase, paired difference, patch, HLO snapshot, full-output comparison and reproduction commands.
+
+The final source-only rebuild on the pinned ARM64 Linux proxy took 7.892 s for the generic native kernels. The unchanged scorer passed at 0.546 s complete, 0.126 s tracing and compilation, and 0.137 s median warm across ten repeats. All ten unit tests and all 65 harness points passed. Worst harness sensitivity and gradient errors were 0.846 and 0.924 in the near-null Voyager FM case, within its original stored tolerances.
+
 ## Benchmarking further changes
 
 For a quick cold-start measurement, run `python benchmark_slim.py` in a fresh process. The [slim runner](../benchmark_slim.py) uses the public UIFO fixture and the scored benchmark's forward, readout and gradient functions. Its single wall-clock time includes imports, CPU initialization, setup, JIT and transfer of the results back to the host. Use `benchmark.py` for the scored result, correctness checks, warm repeats and per-phase timings.

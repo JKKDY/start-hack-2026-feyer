@@ -145,6 +145,49 @@ def host_forward(plan, base, phases, carrier_sweep, signal_sweep,
     return State(carrier, carrier_matrix, signal, packed, before_coupling, weights, covariance, noise)
 
 
+from functools import lru_cache
+
+@lru_cache(maxsize=1)
+def _covariance_kernel():
+    import ctypes
+    from .rust_kernel import installed_kernel
+    path = installed_kernel()
+    if path is None:
+        return None
+    try:
+        kernel = ctypes.CDLL(str(path.with_name("sparse-" + path.name))).covariance_pullback
+    except (OSError, AttributeError):
+        return None
+    kernel.argtypes = [ctypes.c_size_t] * 4 + [ctypes.c_void_p] * 7
+    kernel.restype = None
+    return kernel
+
+
+def covariance_pullback(weights, covariance, variance_bar, rows, cols):
+    nd, nf, width = weights.shape
+    entries = len(rows)
+    kernel = _covariance_kernel()
+    if (kernel is not None and weights.dtype == covariance.dtype == np.complex128
+            and variance_bar.dtype == np.float64 and variance_bar.shape == (nd, nf, 1)
+            and covariance.shape == (nf, entries) and rows.shape == cols.shape == (entries,)
+            and rows.dtype.kind in "iu" and cols.dtype.kind in "iu"
+            and np.all((rows >= 0) & (rows < width)) and np.all((cols >= 0) & (cols < width))):
+        inputs = (np.ascontiguousarray(rows, dtype=np.int64), np.ascontiguousarray(cols, dtype=np.int64),
+                  np.ascontiguousarray(weights), np.ascontiguousarray(covariance),
+                  np.ascontiguousarray(variance_bar))
+        terms = np.empty((nd, nf, entries), dtype=np.complex128)
+        weights_bar = np.zeros((nd, nf, width), dtype=np.complex128)
+        kernel(nd, nf, width, entries, *(x.ctypes.data for x in (*inputs, terms, weights_bar)))
+        return terms.sum(axis=0), weights_bar
+    left, right = weights[..., rows], weights[..., cols]
+    covariance_bar = np.sum(variance_bar * left.conj() * right, axis=0)
+    weights_bar = np.zeros_like(weights)
+    np.add.at(weights_bar, (slice(None), slice(None), rows), variance_bar * (covariance * right).conj())
+    np.add.at(weights_bar, (slice(None), slice(None), cols), variance_bar * left.conj() * covariance)
+
+    return covariance_bar, weights_bar
+
+
 def host_reverse(plan, base, phases, carrier_sweep, signal_sweep, selection_template, state, seeds):
     base, phases, carrier_sweep, signal_sweep, selection_template = map(
         np.asarray, (base, phases, carrier_sweep, signal_sweep, selection_template),
@@ -153,11 +196,8 @@ def host_reverse(plan, base, phases, carrier_sweep, signal_sweep, selection_temp
     carrier_bar, signal_bar, noise_bar = map(np.asarray, seeds)
     carrier_bar = carrier_bar.T.copy()
     variance_bar = (noise_bar.reshape(noise.shape) * (NOISE_SCALE / 2) / noise)[..., None]
-    left, right = weights[..., plan.noise_rows], weights[..., plan.noise_columns]
-    covariance_bar = np.sum(variance_bar * left.conj() * right, axis=0)
-    weights_bar = np.zeros_like(weights)
-    np.add.at(weights_bar, (slice(None), slice(None), plan.noise_rows), variance_bar * (covariance * right).conj())
-    np.add.at(weights_bar, (slice(None), slice(None), plan.noise_columns), variance_bar * left.conj() * covariance)
+    covariance_bar, weights_bar = covariance_pullback(
+        weights, covariance, variance_bar, plan.noise_rows, plan.noise_columns)
 
     rows, cols, pointers = plan.pattern
     rhs_bar, d_bar = _factor_and_solve(

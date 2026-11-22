@@ -324,8 +324,16 @@ def _simulate_impl(
         varying = np.union1d(carrier_changing_parameter_indices, signal_changing_parameter_indices)
 
     # Insert optimized parameter values into the base parameter row.
+    # The builder exposes static destinations. A proven unique scatter needs
+    # no auxiliary last-write bookkeeping in JAX's transposed update.
+    unique_destinations = (
+        isinstance(optimized_parameter_indices, np.ndarray)
+        and np.all(optimized_parameter_indices >= 0)
+        and np.all(optimized_parameter_indices < parameters.shape[1])
+        and np.unique(optimized_parameter_indices).size == optimized_parameter_indices.size
+    )
     parameters = parameters.at[[0], optimized_parameter_indices].set(
-        optimized_parameters[optimized_value_indices]
+        optimized_parameters[optimized_value_indices], unique_indices=unique_destinations
     )
 
     # Apply parameter linking (derived parameters).

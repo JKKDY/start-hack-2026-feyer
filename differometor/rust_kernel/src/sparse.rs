@@ -245,3 +245,42 @@ pub unsafe extern "C" fn optical_sweep(
     }
     0
 }
+
+// The caller validates indices and supplies contiguous arrays. Each detector
+// contributes independently; row writes precede all column writes for its field.
+#[no_mangle]
+pub unsafe extern "C" fn covariance_pullback(
+    detectors: usize,
+    frequencies: usize,
+    fields: usize,
+    entries: usize,
+    rows: *const i64,
+    cols: *const i64,
+    weights: *const C,
+    cov: *const C,
+    seed: *const f64,
+    cov_terms: *mut C,
+    weight_bar: *mut C,
+) {
+    for d in 0..detectors {
+        for f in 0..frequencies {
+            let batch = d * frequencies + f;
+            let w = weights.add(batch * fields);
+            let out = weight_bar.add(batch * fields);
+            let c = cov.add(f * entries);
+            let scale = *seed.add(batch);
+            for k in 0..entries {
+                let i = *rows.add(k) as usize;
+                let j = *cols.add(k) as usize;
+                let left = (*w.add(i)).conj() * scale;
+                *cov_terms.add(batch * entries + k) = left * *w.add(j);
+                *out.add(i) += (*c.add(k) * *w.add(j)).conj() * scale;
+            }
+            for k in 0..entries {
+                let i = *rows.add(k) as usize;
+                let j = *cols.add(k) as usize;
+                *out.add(j) += ((*w.add(i)).conj() * scale) * *c.add(k);
+            }
+        }
+    }
+}

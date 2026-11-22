@@ -193,6 +193,15 @@ void ComplexSparseLU::factorize(int n, int nnz, const int* colptr, const int* ro
   Impl& m = *impl_;
   m.n = n;
   m.refinement_steps = lu_options.refinement_steps;
+  if (!lu_options.natural_ordering) {
+    // DFM_SIGNAL_REFINEMENT=<steps>: run-time override for fill-reducing
+    // (signal) factorisations, for accuracy comparisons.
+    static const int override_steps = [] {
+      const char* v = std::getenv("DFM_SIGNAL_REFINEMENT");
+      return v ? std::atoi(v) : -1;
+    }();
+    if (override_steps >= 0) m.refinement_steps = override_steps;
+  }
   if (n == 0) {
     return;
   }

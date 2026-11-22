@@ -19,6 +19,9 @@
 #ifndef DFM_CARRIER_REFINEMENT_STEPS
 #define DFM_CARRIER_REFINEMENT_STEPS 2
 #endif
+#ifndef DFM_SIGNAL_REFINEMENT_STEPS
+#define DFM_SIGNAL_REFINEMENT_STEPS 1
+#endif
 
 namespace dfm {
 namespace {
@@ -37,6 +40,14 @@ constexpr double kDegree = 3.141592653589793 / 180.0;  // jnp.radians factor
 // enough to change that readout by a factor ~2,400. Carrier matrices are
 // small, so the extra fill costs little. Signal solves keep COLAMD.
 constexpr LUOptions kCarrierLU{/*natural_ordering=*/true, /*refinement_steps=*/DFM_CARRIER_REFINEMENT_STEPS};
+
+// Signal solves: COLAMD order, one step of iterative refinement. One step of
+// fixed-precision refinement already makes partial-pivoting LU componentwise
+// backward stable (Skeel 1980); measured on all 13 harness setups, a second
+// step changes no reported error, while no refinement fails uifo3_finesse,
+// uifo3_20_5000 and voyager_space. DFM_SIGNAL_REFINEMENT=<steps> overrides
+// this at run time (for such comparisons).
+constexpr LUOptions kSignalLU{/*natural_ordering=*/false, /*refinement_steps=*/DFM_SIGNAL_REFINEMENT_STEPS};
 
 // Non-zero positions of the selection vectors (static per plan): only these
 // entries of s are non-zero, so s^H c only needs them.
@@ -93,7 +104,7 @@ ForwardOutputs simulate_passive(const SimulationPlan& plan, const Eigen::Ref<con
 
   Eigen::MatrixXcd sel(n, q_count), work(n, q_count), sources(n, q_count);
   for (Index b = 0; b < batch; ++b) {
-    ComplexSparseLU lu(*signal_sys.pattern, signal_sys.values.row(b).data());
+    ComplexSparseLU lu(*signal_sys.pattern, signal_sys.values.row(b).data(), kSignalLU);
     VectorC y = signal_sys.rhs.row(b).transpose();
     lu.solve_inplace(y);
     out.signal.col(b) = y;
@@ -191,7 +202,7 @@ RecordedOutputs simulate_recorded(const SimulationPlan& plan, const ActiveReal* 
   std::vector<ActiveReal> sel(static_cast<std::size_t>(2 * n * qn)), cov(sel.size());
   for (Index b = 0; b < batch; ++b) {
     std::optional<pf::Scope> sc1(std::in_place, pf::SignalFactor);
-    RecordedLinearSystem system(signal_sys.pattern, signal_sys.values.data() + b * 2 * signal_nnz);
+    RecordedLinearSystem system(signal_sys.pattern, signal_sys.values.data() + b * 2 * signal_nnz, kSignalLU);
     sc1.reset();
     if (q_count == 0) {
       pf::Scope sc(pf::SignalSolve);

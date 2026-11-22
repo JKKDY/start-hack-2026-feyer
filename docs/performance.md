@@ -216,6 +216,27 @@ On the scored Mac input, the saved sensitivity, signal and noise arrays matched 
 
 With the pinned dependencies installed, build the C++ extension with `python -m pip install -e .` and the Rust library with `python -m differometor.rust_kernel.build` (Cargo on macOS or Linux). Run `DIFFEROMETOR_NATIVE=1 python benchmark.py`, adding `--cpus 1` on Linux. To reproduce flagged C++ set `DIFFEROMETOR_DISABLE_NATIVE=1` as well. To reproduce original C++ also set `DIFFEROMETOR_KEEP_XLA_FLAGS=1` with no external XLA flags.
 
+#### Reducing first-run setup on the Rust AOT branch
+
+The setup experiment uses commit `82b9785` as its control and the original benchmark. All timed processes start fresh, including the imports, optical setup, complete forward and gradient computation, and host transfer. Each comparison uses ten warm repeats per process. macOS 26.5.2 runs natively on an Apple M1 (eight logical CPUs, 16 GiB RAM) with default affinity. Linux runs on the same ARM64 host in Docker pinned to one logical CPU. Both use Python 3.12.16, JAX and jaxlib 0.9.0 with x64 enabled.
+
+Python import profiling identified SciPy sparse and sparse linear algebra as substantial imports (87 and 65 ms cumulative respectively in one instrumented Mac launch). We moved those imports to the sparse solve and compared eager, deferred, and background loading. Background loading competed with the graph build and increased the initial Mac median. Deferred loading reduced the setup counter and added work to the first forward evaluation. The table includes both in the complete first run. Deferring SciPy in default JAX moved work into lowering and raised a three-pair cold median from 2.012 to 2.038 s. The retained default JAX path loads SciPy eagerly.
+
+The retained builder derives CSC coordinates directly from both optical sidebands, the appended signal block and all possible writes. It packs covariance from the noise write coordinates. Dense templates remain available through the existing API. Setup also avoids redundant dense copies and a host-to-JAX-to-host trip for static parameters. The native adapter reuses the Rust sweep plan for matching immutable index arrays and computes duplicate-write gradient masks before the callbacks. Within each sparse solve, canonical matrix structure and the detector operator are reused across frequencies. Each frequency still gets its own numeric factorization and both iterative refinement steps.
+
+| Platform and backend | First run (s) | Setup (s) | Optical build (s) | Compile (s) | First forward (s) | Warm (s) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Mac, prior AOT | 0.9887 | 0.5768 | 0.0679 | 0.1695 | 0.1078 | 0.2064 |
+| Mac, revised AOT | 0.8817 | 0.3949 | 0.0524 | 0.1528 | 0.2285 | 0.1956 |
+| Linux, prior AOT | 1.0628 | 0.4358 | 0.0743 | 0.2320 | 0.1744 | 0.3467 |
+| Linux, revised AOT | 1.0277 | 0.3331 | 0.0600 | 0.2216 | 0.2403 | 0.3169 |
+| Mac, prior default JAX | 1.9986 | 0.4723 | 0.0557 | 1.3252 | 0.1046 | 0.1996 |
+| Mac, revised default JAX | 1.9313 | 0.4522 | 0.0463 | 1.2699 | 0.0955 | 0.1838 |
+
+Medians above use five alternated pairs for each AOT platform and five pairs for the Mac default JAX path. In the preliminary Mac comparison, five fresh processes each gave first-run medians of 0.688 s for deferred imports, 0.707 s for eager imports, 0.770 s for background imports. Before reusing the sparse operator buffers, sequential five-pair AOT tests gave 0.896 s for Mac control, 0.900 s for Mac candidate, 1.033 s for Linux control, 0.994 s for Linux candidate.
+
+Mac native passed all 13 setups at five parameter points each. Worst suite sensitivity and gradient errors were 0.0627 and 0.001463, respectively. Linux native passed all 13 setups at five parameter points each. Worst suite sensitivity and gradient errors were 0.8453 and 0.9233, respectively. Linux JAX passed all 13 setups at five parameter points each. Worst suite sensitivity and gradient errors were 0.8455 and 0.9249, respectively. Mac JAX passed all 13 setups at five parameter points each. Worst suite sensitivity and gradient errors were 0.0667 and 0.00146, respectively. The largest errors occurred in the existing near-null Voyager FM case. All saved carrier, signal, noise, sensitivity, power and full-gradient arrays matched the control bit for bit on the scored input on both platforms. A dedicated test compares direct packing with dense reconstruction, including duplicate writes, RHS slots and initially zero coefficients.
+
 ## Benchmarking further changes
 
 For a quick cold-start measurement, run `python benchmark_slim.py` in a fresh process. The [slim runner](../benchmark_slim.py) uses the public UIFO fixture and the scored benchmark's forward, readout and gradient functions. Its single wall-clock time includes imports, CPU initialization, setup, JIT and transfer of the results back to the host. Use `benchmark.py` for the scored result, correctness checks, warm repeats and per-phase timings.

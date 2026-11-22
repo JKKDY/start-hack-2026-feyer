@@ -119,6 +119,8 @@ def standardize_output(output: list) -> jnp.ndarray:
     output_length = len(output)
     if output_length < 4:
         output.extend([0] * (4 - output_length))
+    if any(np.ndim(value) for value in output):
+        return jnp.stack(jnp.broadcast_arrays(*output)).astype(jnp.complex128)
     return jnp.array(output, dtype=jnp.complex128)
 
 

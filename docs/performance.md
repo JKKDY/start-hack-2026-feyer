@@ -216,6 +216,29 @@ On the scored Mac input, the saved sensitivity, signal and noise arrays matched 
 
 With the pinned dependencies installed, build the C++ extension with `python -m pip install -e .` and the Rust library with `python -m differometor.rust_kernel.build` (Cargo on macOS or Linux). Run `DIFFEROMETOR_NATIVE=1 python benchmark.py`, adding `--cpus 1` on Linux. To reproduce flagged C++ set `DIFFEROMETOR_DISABLE_NATIVE=1` as well. To reproduce original C++ also set `DIFFEROMETOR_KEEP_XLA_FLAGS=1` with no external XLA flags.
 
+#### One Rust library for ordinary JAX and native AOT execution
+
+The setup changes from `b32d0c2` were reverted in `137df90`, restoring the `82b9785` implementation. The saved plain benchmark had taken 2.292 s. That invocation used the ordinary JAX path. A separate AOT invocation required an environment setting. The acceptance target for this change was 1.4 s total on the developer's M1 with the ordinary benchmark command.
+
+The host build now exports both the direct coefficient interface used by the AOT engine and the XLA foreign-function interface used by the earlier JAX prototype (`ddec3a3`). One library serves both. On CPU, ordinary packed simulation with a compatible library calls Rust to evaluate signal coefficients and their analytic pullback. Other operations still use JAX. The ordinary path retains JAX rules for forward and higher derivatives and batching. Empty parameter links and identity sweeps skip unnecessary work. Packed groups can scatter in their own order when destinations are unique. Repeated destinations retain their original order. The AOT path retains its own instruction ordering. A missing compatible binary falls back to JAX.
+
+| Platform and invocation | Runs | Total (s) | Setup (s) | Build within setup (s) | Compile (s) | Warm (s) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Mac plain, restored | 5 | 1.6740 | 0.3930 | 0.0476 | 1.0995 | 0.1769 |
+| Mac plain, shared library | 5 | 1.1484 | 0.3966 | 0.0418 | 0.5701 | 0.1719 |
+| Mac AOT, restored | 3 | 0.6910 | 0.3903 | 0.0472 | 0.1192 | 0.1830 |
+| Mac AOT, shared library | 3 | 0.6714 | 0.3840 | 0.0395 | 0.1055 | 0.1750 |
+| Linux plain, restored | 3 | 2.1463 | 0.3129 | 0.0564 | 1.5244 | 0.2953 |
+| Linux plain, shared library before compiler tuning | 3 | 1.4086 | 0.3066 | 0.0446 | 0.8100 | 0.2830 |
+| Linux plain, final shared library | 5 | 1.3261 | 0.3181 | 0.0473 | 0.6909 | 0.2774 |
+| Linux AOT, final shared library | 1 | 0.7273 | 0.3183 | 0.0518 | 0.1141 | 0.2822 |
+
+Medians use fresh processes and ten warm repeats. The M1 host has eight logical CPUs and 16 GiB RAM and runs macOS 26.5.2 with default affinity. ARM64 Linux runs in Docker on one pinned logical CPU on the same host. Both use Python 3.12.16 and JAX/jaxlib 0.9.0 with x64 enabled. The initial separate-library prototype had one Mac run at 1.643 s. The integrated version measured 1.178, 1.166, 1.148, 1.143, 1.134 s. Initialization and imports vary by launch. The main saving was compilation. An extra sparse-buffer reuse variant was dropped after one of five Mac trials took 1.952 s and its one-CPU Linux median was 1.409 s. At JAX optimization level O0, the two Linux screening runs took 1.524 and 1.398 s. Disabling parallel LLVM code-generation splitting on one pinned CPU gave 1.331 and 1.284 s. We retained the latter setting only when process affinity is exactly one CPU, respecting user overrides.
+
+Mac plain passed all 13 setups at five parameter points each. Worst sensitivity and gradient errors were 0.0627 and 0.001463, respectively, in the known near-null Voyager FM case. Linux plain passed all 13 setups at five parameter points each. Worst sensitivity and gradient errors were 0.8453 and 0.9233, respectively, in the known near-null Voyager FM case. The full suites also passed on both native AOT paths and on the Mac with the native library disabled. At the nominal point on Mac the relative L2 differences against the restored plain path were 3.68e-11 for sensitivity and 6.17e-10 for the gradient. Carrier and powers agreed exactly. The coefficient tests exercise complex values, JVPs, VJPs, higher derivatives and batching.
+
+Build the library once per compatible installation with `python -m differometor.rust_kernel.build` (Cargo and a C++17 compiler). The local Mac build took 6.877 s before benchmarking. Use `python benchmark.py` normally or `DIFFEROMETOR_NATIVE=1 python benchmark.py` for the full AOT backend. Use `DIFFEROMETOR_DISABLE_NATIVE=1` without selecting AOT to exercise the JAX fallback. Windows retains the pure JAX option.
+
 ## Benchmarking further changes
 
 For a quick cold-start measurement, run `python benchmark_slim.py` in a fresh process. The [slim runner](../benchmark_slim.py) uses the public UIFO fixture and the scored benchmark's forward, readout and gradient functions. Its single wall-clock time includes imports, CPU initialization, setup, JIT and transfer of the results back to the host. Use `benchmark.py` for the scored result, correctness checks, warm repeats and per-phase timings.

@@ -21,6 +21,10 @@ def _configure_xla():
         flags += " --xla_backend_optimization_level=0"
     if "--xla_cpu_use_fusion_emitters" not in flags:
         flags += " --xla_cpu_use_fusion_emitters=false"
+    # Parallel LLVM code generation adds scheduling overhead on a pinned CPU.
+    if (hasattr(os, "sched_getaffinity") and len(os.sched_getaffinity(0)) == 1
+            and "--xla_cpu_parallel_codegen_split_count" not in flags):
+        flags += " --xla_cpu_parallel_codegen_split_count=1"
     os.environ["XLA_FLAGS"] = flags.strip()
 
 

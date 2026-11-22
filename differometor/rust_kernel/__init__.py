@@ -17,8 +17,10 @@ def kernel_path():
         "Cargo.toml",
         "Cargo.lock",
         "generate.py",
+        "bridge.cc",
         "src/lib.rs",
         "../components.py",
+        "../native_coefficients.py",
         "../_rust_sweep.py",
         "build.py",
     ):

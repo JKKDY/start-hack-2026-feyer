@@ -1,4 +1,4 @@
-"""Build the optional CPU kernel with Cargo on this host."""
+"""Build the optional CPU kernel with Cargo and a C++17 compiler on this host."""
 import os
 from pathlib import Path
 import shutil
@@ -7,6 +7,7 @@ import sys
 from tempfile import TemporaryDirectory
 from time import perf_counter
 
+import jax
 
 from . import kernel_path
 
@@ -16,9 +17,10 @@ def main():
         raise SystemExit("The optional CPU kernel supports macOS and Linux.")
     start = perf_counter()
     cargo = shutil.which("cargo")
-    if not cargo:
+    compiler = shutil.which(os.environ.get("CXX", "c++"))
+    if not cargo or not compiler:
         raise SystemExit(
-            "Install Cargo before building the CPU kernel."
+            "Install Cargo and a C++17 compiler before building the CPU kernel."
         )
     source = Path(__file__).resolve().parent
     destination = kernel_path()
@@ -47,8 +49,28 @@ def main():
             cwd=work,
             check=True,
         )
-        suffix = ".dylib" if sys.platform == "darwin" else ".so"
-        (work / "target/release" / ("liboptical_coefficients" + suffix)).replace(destination)
+        link = (
+            ["-dynamiclib"]
+            if sys.platform == "darwin"
+            else ["-shared", "-ldl", "-lpthread", "-lm"]
+        )
+        binary = work / destination.name
+        subprocess.run(
+            [
+                compiler,
+                "-O2",
+                "-std=c++17",
+                "-fPIC",
+                "-I" + jax.ffi.include_dir(),
+                str(source / "bridge.cc"),
+                str(work / "target/release/liboptical_coefficients.a"),
+                *link,
+                "-o",
+                str(binary),
+            ],
+            check=True,
+        )
+        binary.replace(destination)
     print(f"Built {destination} in {perf_counter()-start:.3f} s")
 
 

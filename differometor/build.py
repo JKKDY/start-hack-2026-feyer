@@ -650,7 +650,7 @@ def build(setup: Setup):
 
     # Carrier matrix: identity on the left block, with a separate right-hand-side column.
     carrier_matrix = np.zeros((system_size, system_size + 1), dtype=complex)
-    carrier_matrix[:, :system_size] = np.eye(system_size, dtype=complex)
+    np.fill_diagonal(carrier_matrix, 1)
 
     # Ensure signal_size is at least 1 to avoid conditional logic later.
     if signal_size == 0:
@@ -658,10 +658,10 @@ def build(setup: Setup):
 
     # Signal matrix includes two carrier-sized blocks plus appended signal block, plus a right-hand-side column.
     signal_matrix = np.zeros((system_size * 2 + signal_size, system_size * 2 + signal_size + 1), dtype=complex)
-    signal_matrix[:, : system_size * 2 + signal_size] = np.eye(system_size * 2 + signal_size, dtype=complex)
+    np.fill_diagonal(signal_matrix, 1)
 
     # Noise matrix has the same shape as the signal matrix without the right-hand side.
-    noise_matrix = np.zeros(signal_matrix[:, :-1].shape)
+    noise_matrix = np.zeros(signal_matrix[:, :-1].shape, dtype=complex)
     noise_detectors = {}
 
     # Selection vectors map fields to detector readouts for quantum noise calculations.
@@ -1413,20 +1413,14 @@ def build(setup: Setup):
 
     # Convert linked parameter names to parameter index positions.
     linked_indices = [parameter_names.index(name) for name in linked_names]
-    if len(linked_indices) == 0:
-        linked_indices = [0]
-        indices_to_link = [0]
-        LINKING_FUNCTIONS.append(lambda x: x)
-        linking_function_indices = [0]
-
     return (
         (carrier_instructions, signal_instructions, noise_instructions, signal_components, parameter_names),
         (
             np.array([parameters], dtype=complex),
-            np.array(carrier_matrix),
-            np.array(signal_matrix),
-            np.array(noise_matrix, dtype=complex),
-            np.array(noise_selection_vectors, dtype=complex),
+            carrier_matrix,
+            signal_matrix,
+            noise_matrix,
+            noise_selection_vectors,
             np.array(qhd_parameter_indices, dtype=int),
             np.array(qhd_placing_indices, dtype=int),
             np.array(linked_indices, dtype=int),
@@ -1694,10 +1688,9 @@ def prepare_arrays(
     parameters,
 ):
     """
-    Ensure that all index and value arrays are non-empty and have consistent shapes.
+    Prepare optimization and sweep arguments with consistent shapes.
 
-    This function inserts "do-nothing" dummy indices and values when a particular feature is unused,
-    so downstream vectorized code can run without conditional branches.
+    Empty sweep indices select the identity path in expand_parameters.
 
     Parameters
     ----------
@@ -1749,8 +1742,8 @@ def prepare_arrays(
 
     # Carrier changing defaults.
     if len(carrier_changing_parameter_indices) == 0:
-        carrier_changing_parameter_indices = np.array([0])
-        carrier_changing_values = np.array([parameters[0][carrier_changing_parameter_indices]])
+        carrier_changing_parameter_indices = np.empty(0, dtype=int)
+        carrier_changing_values = np.empty((0, 1), dtype=parameters.dtype)
     else:
         carrier_changing_values = changing_values
         if carrier_changing_values.shape[0] != len(carrier_changing_parameter_indices):
@@ -1765,8 +1758,8 @@ def prepare_arrays(
 
     # Signal changing defaults.
     if len(signal_changing_parameter_indices) == 0:
-        signal_changing_parameter_indices = np.array([0])
-        signal_changing_values = np.array([parameters[0][signal_changing_parameter_indices]])
+        signal_changing_parameter_indices = np.empty(0, dtype=int)
+        signal_changing_values = np.empty((0, 1), dtype=parameters.dtype)
 
     return (
         optimized_parameters,

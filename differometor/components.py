@@ -1385,3 +1385,35 @@ FUNCTIONS = [
 The order is important if the caller uses integer indices to reference a
 component model.
 """
+
+
+# -----------------------------------------------------------------------------
+# NumPy twin for build-time evaluation
+# -----------------------------------------------------------------------------
+
+def _numpy_twin():
+    """Re-create every function of this module with `jnp` bound to NumPy.
+
+    The build step evaluates some component models once (e.g. `mirror_matrix`, `space`)
+    to fill in constant matrix entries. Calling the JAX versions eagerly makes JAX compile
+    a tiny XLA kernel for every new op/shape (~70 compilations, ~0.6 s for the UIFO).
+    The twin runs the *same source code* with NumPy instead, so the physics is defined
+    in one place only. Helpers called from inside a function resolve to their NumPy twins.
+    """
+    import types
+
+    namespace = dict(globals())
+    namespace["jnp"] = np
+    twins = {}
+    for name, value in globals().items():
+        if isinstance(value, types.FunctionType) and value.__module__ == __name__ and not name.startswith("_"):
+            twin = types.FunctionType(value.__code__, namespace, name, value.__defaults__, value.__closure__)
+            twin.__kwdefaults__ = value.__kwdefaults__
+            twin.__doc__ = value.__doc__
+            twins[name] = twin
+    namespace.update(twins)
+    return types.SimpleNamespace(**twins)
+
+
+NUMPY = _numpy_twin()
+"""NumPy versions of all component functions (same source, `jnp` -> `numpy`). Build-time use only."""

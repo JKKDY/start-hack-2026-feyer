@@ -29,10 +29,10 @@ python start_here.py
 For reproducible measurements, numerical checks and the five-bar plot, use the full benchmark:
 
 ```bash
-python benchmark.py --cpus 1 --output benchmark-baseline.json
+python benchmark.py --cpus 1 --output benchmark-packed.json
 ```
 
-`--cpus 1` pins the process to one logical CPU on Linux/WSL. The full benchmark takes roughly 5 minutes for ten repetitions and validation, prints `PASS`, and writes `benchmark-baseline.json` and `benchmark-baseline.png`. Use `--repeats 3` for a shorter run or `--save-arrays baseline.npz` to save outputs. The measured peak memory was about 14.4 GiB.
+`--cpus 1` pins the process to one logical CPU on Linux/WSL. The simulator defaults to packed sparse signal assembly and packed noise covariance, and the original benchmark calls it with those defaults. Use `--repeats 3` for a shorter run or `--save-arrays packed.npz` to save outputs. Check correctness beyond the scored fixture with `python tests/check_general.py --suite all` ([correctness harness](docs/correctness-harness.md)). A successful run prints `PASS` and writes the JSON report and timing plot. [Performance notes](docs/performance.md) describe the numerical comparisons and benchmark timings.
 
 ## If setup fails
 

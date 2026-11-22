@@ -425,6 +425,7 @@ def simulate(
         return run_native(
             plan, parameters, qhd_phase_values, carrier_changing_values, signal_changing_values,
             carrier_matrix, packed_signal.template, packed_noise.template, noise_selection_vectors,
+            reuse_factors=os.environ.get("DIFFEROMETOR_REUSE_LU") != "0",
         )
 
     # --------------------

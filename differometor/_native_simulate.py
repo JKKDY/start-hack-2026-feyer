@@ -7,7 +7,7 @@ import numpy as np
 
 from differometor._native_components import evaluate as evaluate_component
 from differometor.components import F0, H_PLANCK, UNIT_VACUUM
-from differometor.sparse_signal import _factor_and_solve
+from differometor.sparse_signal import ForwardFactors, _factor_and_solve
 
 NOISE_SCALE = 2 * UNIT_VACUUM * H_PLANCK * F0 * 0.25
 
@@ -115,7 +115,7 @@ def detector_selection(plan, selection_template, phases, carrier):
 
 
 def host_forward(plan, base, phases, carrier_sweep, signal_sweep,
-                 carrier_template, signal_template, noise_template, selection_template):
+                 carrier_template, signal_template, noise_template, selection_template, *, forward_factors=None):
     base, phases, carrier_sweep, signal_sweep, carrier_template, signal_template, noise_template, selection_template = map(
         np.asarray, (base, phases, carrier_sweep, signal_sweep, carrier_template, signal_template, noise_template, selection_template),
     )
@@ -133,7 +133,10 @@ def host_forward(plan, base, phases, carrier_sweep, signal_sweep,
     _, selection = detector_selection(plan, selection_template, phases, carrier)
     d = np.broadcast_to(selection, (selection.shape[0], len(packed), selection.shape[-1])).transpose(1, 2, 0)
     rows, _, pointers = plan.pattern
-    signal, weights = _factor_and_solve(packed[:, :len(rows)], rows, pointers, packed[:, len(rows):], d, transpose=False)
+    signal, weights = _factor_and_solve(
+        packed[:, :len(rows)], rows, pointers, packed[:, len(rows):], d, transpose=False,
+        forward_factors=forward_factors,
+    )
 
     covariance = np.broadcast_to(noise_template, (len(packed), noise_template.size)).copy()
     covariance[:, plan.noise_slots] = coefficients(signal_params, plan.noise_instruction)
@@ -143,7 +146,8 @@ def host_forward(plan, base, phases, carrier_sweep, signal_sweep,
     return State(carrier, carrier_matrix, signal, packed, before_coupling, weights, covariance, noise)
 
 
-def host_reverse(plan, base, phases, carrier_sweep, signal_sweep, selection_template, state, seeds):
+def host_reverse(plan, base, phases, carrier_sweep, signal_sweep, selection_template, state, seeds, *,
+                 forward_factors=None):
     base, phases, carrier_sweep, signal_sweep, selection_template = map(
         np.asarray, (base, phases, carrier_sweep, signal_sweep, selection_template),
     )
@@ -160,6 +164,7 @@ def host_reverse(plan, base, phases, carrier_sweep, signal_sweep, selection_temp
     rows, cols, pointers = plan.pattern
     rhs_bar, d_bar = _factor_and_solve(
         packed[:, :len(rows)], rows, pointers, signal_bar.T, weights_bar.transpose(1, 2, 0), transpose=True,
+        forward_factors=forward_factors,
     )
     packed_bar = np.concatenate((
         -rhs_bar[:, rows] * signal[:, cols]
@@ -210,7 +215,7 @@ def host_reverse(plan, base, phases, carrier_sweep, signal_sweep, selection_temp
 
 
 def run(plan, base, phases, carrier_sweep, signal_sweep, carrier_template,
-        signal_template, noise_template, selection_template):
+        signal_template, noise_template, selection_template, *, reuse_factors=True):
     nc = carrier_sweep.shape[1]
     nf = nc * signal_sweep.shape[1]
     n = carrier_template.shape[0]
@@ -221,9 +226,12 @@ def run(plan, base, phases, carrier_sweep, signal_sweep, carrier_template,
     specs = State(*(jax.ShapeDtypeStruct(shape, np.float64 if i == 7 else np.complex128)
                     for i, shape in enumerate(shapes)))
 
-    def evaluate(base, phases, cs, ss, cm, sm, nm, selections):
+    factor_cache = ForwardFactors() if reuse_factors else None
+
+    def evaluate(base, phases, cs, ss, cm, sm, nm, selections, *, forward_factors=None):
         return jax.pure_callback(
-            partial(host_forward, plan), specs, base, phases, cs, ss, cm, sm, nm, selections,
+            partial(host_forward, plan, forward_factors=forward_factors),
+            specs, base, phases, cs, ss, cm, sm, nm, selections,
             vmap_method="sequential",
         )
 
@@ -235,13 +243,13 @@ def run(plan, base, phases, carrier_sweep, signal_sweep, carrier_template,
         return outputs(evaluate(base, phases, cs, ss, cm, sm, nm, selections))
 
     def forward(base, phases, cs, ss, cm, sm, nm, selections):
-        state = evaluate(base, phases, cs, ss, cm, sm, nm, selections)
+        state = evaluate(base, phases, cs, ss, cm, sm, nm, selections, forward_factors=factor_cache)
         return outputs(state), (base, phases, cs, ss, selections, state)
 
     def reverse(residual, seeds):
         gradients = jax.pure_callback(
-            partial(host_reverse, plan), (jax.ShapeDtypeStruct(base.shape, base.dtype),
-                                         jax.ShapeDtypeStruct(phases.shape, phases.dtype)),
+            partial(host_reverse, plan, forward_factors=factor_cache),
+            (jax.ShapeDtypeStruct(base.shape, base.dtype), jax.ShapeDtypeStruct(phases.shape, phases.dtype)),
             *residual, seeds, vmap_method="sequential",
         )
         return (*gradients, None, None, None, None, None, None)

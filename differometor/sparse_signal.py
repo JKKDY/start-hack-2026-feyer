@@ -1,6 +1,7 @@
 """Experimental CPU signal solver with a shared sparse factorization."""
 
 from functools import partial
+from threading import Lock
 from typing import NamedTuple
 
 import jax
@@ -82,6 +83,27 @@ def pack_signal_template(template, pattern, update_indices, coupling_indices, ca
 REFINEMENT_STEPS = 2
 
 
+class ForwardFactors:
+    """One batch of LU factors shared by a pair of compiled host callbacks."""
+
+    def __init__(self):
+        self._lock = Lock()
+        self._batch = None
+
+    def remember(self, key, factors):
+        with self._lock:
+            self._batch = (key, factors)
+
+    def take(self, key):
+        # Detach the batch under the lock so two solves cannot share a factor.
+        with self._lock:
+            if self._batch is None or self._batch[0] != key:
+                return None
+            _, factors = self._batch
+            self._batch = None
+            return factors
+
+
 def _refine(solve, apply, rhs, solution):
     """x <- x + solve(b - A x), repeated REFINEMENT_STEPS times."""
     for _ in range(REFINEMENT_STEPS):
@@ -89,16 +111,30 @@ def _refine(solve, apply, rhs, solution):
     return solution
 
 
-def _factor_and_solve(coefficients, rows, pointers, signal_rhs, detector_rhs, *, transpose):
+def _factor_and_solve(coefficients, rows, pointers, signal_rhs, detector_rhs, *, transpose, forward_factors=None):
     coefficients, rows, pointers, signal_rhs, detector_rhs = map(
         np.asarray, (coefficients, rows, pointers, signal_rhs, detector_rhs)
     )
     signal = np.empty_like(signal_rhs)
     detectors = np.empty_like(detector_rhs)
     size = signal_rhs.shape[1]
+    # Verify the exact CSC input on a hit and limit retained inputs and fill-in.
+    key = None
+    if forward_factors is not None and coefficients.nbytes + rows.nbytes + pointers.nbytes <= 16 * 1024**2:
+        key = (size, coefficients.shape, coefficients.dtype, rows.dtype, pointers.dtype,
+               coefficients.tobytes(), rows.tobytes(), pointers.tobytes())
+    retained = forward_factors.take(key) if transpose and key is not None else None
+    collected = [] if not transpose and key is not None else None
+    nonzeros = 0
     for frequency, entries in enumerate(coefficients):
         matrix = csc_matrix((entries, rows, pointers), shape=(size, size))
-        factors = splu(matrix)
+        factors = splu(matrix) if retained is None else retained[frequency]
+        if collected is not None:
+            nonzeros += factors.nnz
+            if nonzeros <= 2_000_000:
+                collected.append(factors)
+            else:
+                collected = None
         if transpose:      # A^T x = b
             solve_signal = lambda b: factors.solve(b, trans="T")  # noqa: E731
             apply_signal = matrix.T.__matmul__
@@ -117,6 +153,8 @@ def _factor_and_solve(coefficients, rows, pointers, signal_rhs, detector_rhs, *,
                 solve_detector = lambda b: factors.solve(b, trans="H")  # noqa: E731
                 apply_detector = matrix.conj().T.__matmul__
             detectors[frequency] = _refine(solve_detector, apply_detector, rhs, solve_detector(rhs))
+    if collected is not None:
+        forward_factors.remember(key, collected)
     return signal, detectors
 
 

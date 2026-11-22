@@ -207,6 +207,19 @@ Both native runs passed the scored sensitivity and finite-difference gradient ch
 
 Build with `python -m pip install -e .` using a C++ compiler and set `DIFFEROMETOR_NATIVE=1` before starting the benchmark process. The generated C++ include is part of the source distribution. A clean source archive built and imported on Windows. Regenerate the include with `python profiling/generate_native_components.py` after editing the component formulas. The backend stays opt-in because warm execution is slower and the native adapter currently returns reverse-mode gradients for design parameters. The default path retains forward-mode and other differentiable inputs.
 
+##### Reuse forward SuperLU factors
+
+The native path now retains one forward batch per compiled callback pair. The reverse call takes the factors only when the packed coefficients and CSC pattern match byte for byte. Taking the batch is synchronized and removes it from the cache, so overlapping or repeated pullbacks fall back to refactorization on a miss. A forward-only simulation skips retention. Both refinement steps and the existing transpose and conjugation rules still apply.
+
+Seven interleaved pairs used the original benchmark, one pinned Windows logical CPU, XLA level 0 and three warm repeats per process. Set `DIFFEROMETOR_REUSE_LU=0` to reproduce the native control.
+
+| Native backend | Cold (s) | JIT (s) | Warm (s) | Warm reverse (s) |
+| --- | ---: | ---: | ---: | ---: |
+| Refactor in reverse | 1.493 | 0.438 | 0.325 | 0.181 |
+| Reuse forward factors | 1.428 | 0.428 | 0.280 | 0.121 |
+
+Reuse was faster cold in five of seven pairs, with a 0.037 s median paired saving. All scored runs and all 13 validation setups with their fuzzed points passed. The maximum scored log-sensitivity error was 5.37 × 10⁻⁶ and the gradient spot-check error was 1.06 × 10⁻⁸ in both modes. The out-of-order regression verifies a hit for the matching batch and exact results after eviction and repeated use. An alternate experiment copied sparse factor arrays into the JAX residual. It passed validation and cost more warm time than refactorization, so the implementation retains the SuperLU objects.
+
 ## Benchmarking further changes
 
 For a quick cold-start measurement, run `python benchmark_slim.py` in a fresh process. The [slim runner](../benchmark_slim.py) uses the public UIFO fixture and the scored benchmark's forward, readout and gradient functions. Its single wall-clock time includes imports, CPU initialization, setup, JIT and transfer of the results back to the host. Use `benchmark.py` for the scored result, correctness checks, warm repeats and per-phase timings.

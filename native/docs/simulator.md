@@ -42,14 +42,28 @@ on CoDiPack types:
 Optical signal matrices are badly scaled: cond(M) reaches about 1e31, with
 optomechanical entries near 1e-9 next to modulation entries near 1e11.
 
-**Iterative refinement.** Plain SuperLU (COLAMD ordering, partial pivoting)
-loses accuracy that dense LAPACK LU keeps; at the nominal Voyager point the
-native log-noise was off by 3e-3. `ComplexSparseLU` therefore does two steps
-of iterative refinement in every solve, for both `A` and `Aᴴ`, with the same
-factors. This is the scheme the repository's packed JAX solver validated
-(`differometor/sparse_signal.py`). Forward and adjoint solves share their
-factors, so the implicit adjoints stay consistent. The tests check each
-solution's backward error (below 1e-12).
+**Signal factorisation.** Signal matrices use a native left-looking sparse LU
+(`src/native_lu.*`): Gilbert–Peierls with partial pivoting, the pivot rule
+SuperLU uses with `diag_pivot_thresh = 1`, on a COLAMD column order
+computed once per structure. At these sizes SuperLU's supernodal set-up
+dominated (scored UIFO: n = 751, L+U ≈ 8,200 entries; 101 factorisations
+take 20 ms instead of 55 ms). `DFM_LU_BACKEND=superlu` selects SuperLU at
+run time. Reusing one frequency's pivot sequence for the next (KLU-style
+refactorisation) does not apply: partial pivoting picks a different
+sequence at every scored frequency.
+
+**Iterative refinement.** Sparse LU without refinement loses accuracy that
+dense LAPACK LU keeps; at the nominal Voyager point the native log-noise was
+off by 3e-3. `ComplexSparseLU` therefore refines every solve, for both `A`
+and `Aᴴ`, with the same factors, as the repository's packed JAX solver does
+(`differometor/sparse_signal.py`). Signal solves use one step: a second step
+changes no harness error on any of the 13 setups, while no refinement fails
+`uifo3_finesse`, `uifo3_20_5000` and `voyager_space`. One fixed-precision step
+already makes partial-pivoting LU componentwise backward stable (Skeel 1980).
+Carrier solves keep two steps. `DFM_SIGNAL_REFINEMENT=<steps>` overrides the
+signal setting at run time. Forward and adjoint solves share their factors,
+so the implicit adjoints stay consistent. The tests check each solution's
+backward error (below 1e-12).
 
 **Carrier solves use the natural column order.** With partial pivoting that
 is dense LAPACK's pivot sequence, which upstream uses. At near-null operating
@@ -69,6 +83,14 @@ keep COLAMD.
 build time (`-DDFM_EQUILIBRATE=1`) but off. It is not needed once refinement
 is on, and it does not change the near-null result, which is set by the
 carrier ordering.
+
+**Signal and noise as one tape entry.** For each frequency with noise
+detectors, `record_signal_noise` (`src/sparse_ad.cpp`) records `y = A⁻¹b` and
+`c = A⁻¹ V A⁻ᴴ s` as one CoDiPack external function. `A` and `V` are
+registered once, and the intermediates `w = A⁻ᴴs` and `u = Vw` stay out of
+the tape. Its reverse rule does one `(1 + m)`-column `Aᴴ` solve and one
+`m`-column `A` solve, then forms `Abar = -(bbar yᴴ + ubar cᴴ + w sbarᴴ)` and
+`Vbar = ubar wᴴ` on occupied slots.
 
 ## Reverse mode and state (`src/simulator.cpp`)
 
@@ -219,7 +241,17 @@ All configurations run in one process on one compiled extension.
 
 Totals: 80 GoogleTest tests and 273 pytest tests.
 
-## Performance (first look, not yet optimised)
+## Performance
+
+Warm on WSL (scored UIFO, 1 CPU, `f7be1dc`), the passive forward takes 39 ms
+and the recorded forward 66 ms. Of the recorded forward, about 20 ms is
+assembly, 22 ms factorisation and 23 ms the fused signal/noise solves. The
+backward takes 18 ms. `DFM_PROFILE=1` prints this split after every pass,
+plus CoDiPack's tape statistics. `bench/bench_factor.cpp` compares SuperLU
+variants, Eigen's SparseLU and the native LU on dumped signal matrices. See
+`docs/performance.md` for benchmark results.
+
+First look (before these optimisations):
 
 `bench/bench_native_simulator.py` runs the benchmark workload (scored UIFO,
 101 frequencies, 193 parameters) cold, pinned to one CPU on the development
@@ -242,8 +274,10 @@ JAX baseline on the same laptop was 35.6 s. Max log-sensitivity error was
 - **Round-off-dominated operating points:** where upstream's own outputs are
   set by round-off, as at the `voyager_fm` nominal point, native and upstream
   values differ within that noise.
-- **Platform coverage:** MSVC was not re-run for milestones 2–4.
-- **Not yet optimised:** copying active matrix values into the recorded
-  solves and the per-entry placement copies add tape statements. Factor
-  reuse across sweep values with identical matrices (for example the carrier
-  when CV = 1) is already implicit.
+- **Not yet optimised:** recorded assembly costs about 4× its passive
+  version. The linear-index tape adds a copy statement for every placement
+  and a statement for every lower-sideband conjugation, and kernel rows whose
+  inputs do not depend on the swept frequency are re-recorded at every
+  frequency. Passing pointers to the kernel outputs into the external
+  functions, and applying conjugation there, would remove most of these
+  statements.

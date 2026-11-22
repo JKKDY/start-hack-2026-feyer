@@ -650,7 +650,7 @@ def build(setup: Setup):
 
     # Carrier matrix: identity on the left block, with a separate right-hand-side column.
     carrier_matrix = np.zeros((system_size, system_size + 1), dtype=complex)
-    np.fill_diagonal(carrier_matrix, 1)
+    carrier_matrix[:, :system_size] = np.eye(system_size, dtype=complex)
 
     # Ensure signal_size is at least 1 to avoid conditional logic later.
     if signal_size == 0:
@@ -658,10 +658,10 @@ def build(setup: Setup):
 
     # Signal matrix includes two carrier-sized blocks plus appended signal block, plus a right-hand-side column.
     signal_matrix = np.zeros((system_size * 2 + signal_size, system_size * 2 + signal_size + 1), dtype=complex)
-    np.fill_diagonal(signal_matrix, 1)
+    signal_matrix[:, : system_size * 2 + signal_size] = np.eye(system_size * 2 + signal_size, dtype=complex)
 
     # Noise matrix has the same shape as the signal matrix without the right-hand side.
-    noise_matrix = np.zeros(signal_matrix[:, :-1].shape, dtype=complex)
+    noise_matrix = np.zeros(signal_matrix[:, :-1].shape)
     noise_detectors = {}
 
     # Selection vectors map fields to detector readouts for quantum noise calculations.
@@ -1423,9 +1423,9 @@ def build(setup: Setup):
         (carrier_instructions, signal_instructions, noise_instructions, signal_components, parameter_names),
         (
             np.array([parameters], dtype=complex),
-            carrier_matrix,
-            signal_matrix,
-            noise_matrix,
+            np.array(carrier_matrix),
+            np.array(signal_matrix),
+            np.array(noise_matrix, dtype=complex),
             np.array(noise_selection_vectors, dtype=complex),
             np.array(qhd_parameter_indices, dtype=int),
             np.array(qhd_placing_indices, dtype=int),

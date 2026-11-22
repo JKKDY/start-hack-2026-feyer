@@ -1,5 +1,5 @@
 """Packed CPU simulation and its explicit reverse pass."""
-from functools import lru_cache, partial
+from functools import partial
 from typing import NamedTuple
 
 import jax
@@ -103,7 +103,6 @@ class Plan(NamedTuple):
     noise_columns: np.ndarray
     pattern: tuple
     phase_slots: np.ndarray
-    write_masks: tuple = ()
 
 
 def detector_selection(plan, selection_template, phases, carrier):
@@ -171,7 +170,7 @@ def host_reverse(plan, base, phases, carrier_sweep, signal_sweep, selection_temp
     ), axis=1)
     packed_bar[:, plan.conjugate] = packed_bar[:, plan.conjugate].conj()
     coupling_bar = packed_bar[:, plan.coupling_slots]
-    coupling_mask, signal_mask, noise_mask, carrier_mask = plan.write_masks
+    coupling_mask = last_writes(plan.coupling_slots)
     coupling_bar[:, ~coupling_mask] = 0
     carrier_coupling_bar = -coupling_bar * before_coupling
     np.add.at(carrier_bar, (slice(None), plan.coupling_sources),
@@ -195,8 +194,8 @@ def host_reverse(plan, base, phases, carrier_sweep, signal_sweep, selection_temp
 
     carrier_params = expand(base, plan.carrier_parameters, carrier_sweep)
     signal_params = expand(carrier_params, plan.signal_parameters, signal_sweep)
-    signal_seed = packed_bar[:, plan.signal_slots] * signal_mask
-    noise_seed = covariance_bar[:, plan.noise_slots] * noise_mask
+    signal_seed = packed_bar[:, plan.signal_slots] * last_writes(plan.signal_slots)
+    noise_seed = covariance_bar[:, plan.noise_slots] * last_writes(plan.noise_slots)
     parameter_bar = coefficients(signal_params, plan.signal_instruction, signal_seed, plan.active_parameters)
     parameter_bar += coefficients(signal_params, plan.noise_instruction, noise_seed, plan.active_parameters)
     carrier_parameter_bar = unexpand(parameter_bar, plan.signal_parameters, len(carrier))
@@ -207,41 +206,25 @@ def host_reverse(plan, base, phases, carrier_sweep, signal_sweep, selection_temp
     carrier_seed = carrier_rhs_bar[:, r].copy()
     columns = c < n
     carrier_seed[:, columns] *= -carrier[:, c[columns]]
-    carrier_seed *= carrier_mask
+    carrier_seed *= last_writes(r * (n + 1) + c)
     carrier_parameter_bar += coefficients(carrier_params, plan.carrier_instruction, carrier_seed, plan.active_parameters)
     return unexpand(carrier_parameter_bar, plan.carrier_parameters, 1), phase_bar
 
 
-@lru_cache(maxsize=16)
-def prepared_sweep(key, width, library):
-    from ._rust_sweep import Sweep
-    from .static import unwrap_static
-    groups, order, carrier, signal = unwrap_static(key)
-    return Sweep((groups, order), np.union1d(carrier, signal), width, library)
-
-
 def run(plan, base, phases, carrier_sweep, signal_sweep, carrier_template,
-        signal_template, noise_template, selection_template, *, sweep_key=None):
+        signal_template, noise_template, selection_template):
     from .rust_kernel import installed_kernel
     library = installed_kernel()
     groups, order = plan.signal_instruction
     if library and any(group is not None for group in groups):
         from ._rust_sweep import Sweep
+        varying = np.union1d(plan.carrier_parameters, plan.signal_parameters)
         # Invariant cotangents may only be combined within one carrier sweep.
         if carrier_sweep.shape[1] == 1 and all(
             group is None or group[0].shape[1] == 7 for group in groups
         ):
-            if sweep_key is None or jax.tree.leaves(sweep_key):
-                varying = np.union1d(plan.carrier_parameters, plan.signal_parameters)
-                sweep = Sweep(plan.signal_instruction, varying, base.shape[-1], library)
-            else:
-                sweep = prepared_sweep(sweep_key, base.shape[-1], library)
-            plan = plan._replace(signal_instruction=sweep)
-    rows, cols = plan.carrier_slots
-    stride = carrier_template.shape[1]
-    plan = plan._replace(write_masks=tuple(last_writes(slots) for slots in (
-        plan.coupling_slots, plan.signal_slots, plan.noise_slots, rows * stride + cols % stride,
-    )))
+            plan = plan._replace(signal_instruction=Sweep(
+                plan.signal_instruction, varying, base.shape[-1], library))
     nc = carrier_sweep.shape[1]
     nf = nc * signal_sweep.shape[1]
     n = carrier_template.shape[0]

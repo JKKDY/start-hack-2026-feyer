@@ -8,30 +8,6 @@ from differometor.sparse_signal import build_signal_pattern, solve_signal_and_ad
 
 
 class SparseSignalTest(unittest.TestCase):
-    def test_direct_optical_packing_matches_dense_reference(self):
-        from differometor.sparse_signal import (
-            build_signal_pattern, pack_noise_template, pack_optical_noise,
-            pack_optical_signal, pack_signal_template,
-        )
-
-        carrier = np.array([[0, 2j, 1], [3, -4, 0]], dtype=complex)
-        size = 6
-        template = np.eye(size, size + 1, dtype=complex)
-        template[:2, :2] = template[2:4, 2:4] = carrier[:, :2]
-        updates = np.array([[1, 1, 1, 3, 4], [4, 4, -1, -1, 1]])
-        coupling = np.array([[0, 4], [2, 1]])
-        reference = build_signal_pattern(template, updates, coupling)
-        pattern, packed = pack_optical_signal(carrier, size, updates, coupling)
-        expected = pack_signal_template(template, reference, updates, coupling, 2)
-        for left, right in zip((*pattern, *packed), (*reference, *expected), strict=True):
-            np.testing.assert_array_equal(left, right)
-        noise_writes = updates.copy()
-        noise_writes[1] %= size
-        noise = pack_optical_noise(size, noise_writes)
-        expected_noise = pack_noise_template(np.zeros((size, size), complex), noise_writes)
-        for left, right in zip(noise, expected_noise, strict=True):
-            np.testing.assert_array_equal(left, right)
-
     def test_complex_signal_and_two_detectors_match_dense_gradients(self):
         matrix = jnp.asarray([[4 + 1j, 0, 1j], [-1j, 3, 1], [0, -2, 5 - 1j]])
         rhs = jnp.asarray([[1j, 2, 3], [4, 1, -2j]])

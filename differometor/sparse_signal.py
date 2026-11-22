@@ -1,18 +1,13 @@
 """Experimental CPU signal solver with a shared sparse factorization."""
 
-import os
 from functools import partial
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-
-
-# The default JAX path also uses SciPy during lowering. Load it before tracing
-# there, while the AOT path can wait until the first sparse solve.
-if os.environ.get("DIFFEROMETOR_NATIVE") != "1":
-    import scipy.sparse.linalg
+from scipy.sparse import csc_matrix
+from scipy.sparse.linalg import splu
 
 
 class PackedSignal(NamedTuple):
@@ -76,40 +71,6 @@ def pack_signal_template(template, pattern, update_indices, coupling_indices, ca
     return PackedSignal(*(np.asarray(value) for value in (packed, update_slots, coupling_slots, conjugate)))
 
 
-def pack_optical_signal(carrier, size, updates, coupling):
-    """Construct CSC entries directly from both carrier sidebands and potential writes."""
-    nc = len(carrier)
-    r, c = np.nonzero(carrier[:, :nc])
-    sideband = c * size + r
-    diagonal = np.arange(2 * nc, size)
-    initial = np.concatenate((sideband, sideband + nc * (size + 1), diagonal * (size + 1)))
-    def keys(indices):
-        row, col = indices
-        return (col % (size + 1)) * size + (row % size)
-    update, coupled = keys(updates), keys(coupling)
-    boundary = size * size
-    occupied = np.unique(np.concatenate((initial, update[update < boundary], coupled[coupled < boundary])))
-    cols, rows = np.divmod(occupied, size)
-    pointers = np.r_[0, np.cumsum(np.bincount(cols, minlength=size))]
-    pattern = tuple(x.astype(np.int32) for x in (rows, cols, pointers))
-    def slots(k):
-        return np.where(k >= boundary, len(rows) + k - boundary, np.searchsorted(occupied, k)).astype(np.int32)
-    values = np.zeros(len(rows) + size, dtype=carrier.dtype)
-    values[slots(initial)] = np.r_[carrier[r, c], carrier[r, c], np.ones(len(diagonal))]
-    rr = np.r_[rows, np.arange(size)]
-    cc = np.r_[cols, np.full(size, size)]
-    conjugate = ((rr >= nc) & (rr < 2 * nc) & (cc >= nc)) | ((rr >= 2 * nc) & (cc < nc))
-    return pattern, PackedSignal(values, slots(update), slots(coupled), conjugate)
-
-
-def pack_optical_noise(size, indices):
-    """The initial covariance is zero. Every possible nonzero has a write instruction."""
-    r, c = indices
-    keys, slots = np.unique((r % size) * size + (c % size), return_inverse=True)
-    rows, cols = np.divmod(keys, size)
-    return PackedNoise(np.zeros(len(keys), dtype=complex), slots, rows, cols)
-
-
 # Fixed-precision iterative refinement steps applied after every sparse solve.
 #
 # Why: the solution vectors span ~36 orders of magnitude (optical fields vs. mechanical
@@ -129,38 +90,18 @@ def _refine(solve, apply, rhs, solution):
 
 
 def _factor_and_solve(coefficients, rows, pointers, signal_rhs, detector_rhs, *, transpose):
-    from scipy.sparse import csc_matrix
-    from scipy.sparse.linalg import splu
-
     coefficients, rows, pointers, signal_rhs, detector_rhs = map(
         np.asarray, (coefficients, rows, pointers, signal_rhs, detector_rhs)
     )
     signal = np.empty_like(signal_rhs)
     detectors = np.empty_like(detector_rhs)
     size = signal_rhs.shape[1]
-    if not len(coefficients):
-        return signal, detectors
-
-    # A frequency sweep has one CSC structure. Keep the public inputs immutable
-    # and refresh only the numeric buffers for each new factorization.
-    matrix = csc_matrix((coefficients[0].copy(), rows, pointers), shape=(size, size))
-    canonical = matrix.has_canonical_format
-    if canonical:
-        signal_operator = matrix.T if transpose else matrix
-        if detector_rhs.shape[-1]:
-            conjugate = matrix.copy()
-            detector_operator = conjugate if transpose else conjugate.T
     for frequency, entries in enumerate(coefficients):
-        if canonical:
-            matrix.data[:] = entries
-            if detector_rhs.shape[-1]:
-                np.conjugate(entries, out=conjugate.data)
-        else:
-            matrix = csc_matrix((entries, rows, pointers), shape=(size, size))
+        matrix = csc_matrix((entries, rows, pointers), shape=(size, size))
         factors = splu(matrix)
         if transpose:      # A^T x = b
             solve_signal = lambda b: factors.solve(b, trans="T")  # noqa: E731
-            apply_signal = (signal_operator if canonical else matrix.T).__matmul__
+            apply_signal = matrix.T.__matmul__
         else:              # A x = b
             solve_signal = factors.solve
             apply_signal = matrix.__matmul__
@@ -171,10 +112,10 @@ def _factor_and_solve(coefficients, rows, pointers, signal_rhs, detector_rhs, *,
             # The linear transpose of the detector's A^H system is conj(A).
             if transpose:  # conj(A) u = d
                 solve_detector = lambda b: factors.solve(b.conj()).conj()  # noqa: E731
-                apply_detector = (detector_operator if canonical else matrix.conj()).__matmul__
+                apply_detector = matrix.conj().__matmul__
             else:          # A^H u = d
                 solve_detector = lambda b: factors.solve(b, trans="H")  # noqa: E731
-                apply_detector = (detector_operator if canonical else matrix.conj().T).__matmul__
+                apply_detector = matrix.conj().T.__matmul__
             detectors[frequency] = _refine(solve_detector, apply_detector, rhs, solve_detector(rhs))
     return signal, detectors
 

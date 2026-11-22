@@ -29,7 +29,7 @@ from jax import lax, vmap, jit
 from differometor.setups import Setup
 from differometor.build import build, pairs_to_arrays, prepare_arrays, LINKING_FUNCTIONS
 from differometor.components import FUNCTIONS, UNIT_VACUUM, H_PLANCK, F0
-from differometor.sparse_signal import pack_optical_signal, pack_optical_noise, build_signal_pattern, solve_signal_and_adjoint
+from differometor.sparse_signal import build_signal_pattern, pack_noise_template, pack_signal_template, solve_signal_and_adjoint
 from differometor.static import StaticArray, make_static, unwrap_static
 
 
@@ -351,10 +351,6 @@ def simulate(
     """
     # Index arrays from `run_build_step` arrive as StaticArray nodes (compile-time
     # constants under jit); turn them back into plain NumPy arrays. No-op otherwise.
-    sweep_key = None
-    if os.environ.get("DIFFEROMETOR_NATIVE") == "1" and isinstance(signal_output_indices, StaticArray):
-        sweep_key = (signal_function_indices, signal_output_indices,
-                     carrier_changing_parameter_indices, signal_changing_parameter_indices)
     (
         optimized_parameter_indices, optimized_value_indices, carrier_changing_parameter_indices,
         signal_changing_parameter_indices, qhd_parameter_indices, qhd_placing_indices,
@@ -428,7 +424,7 @@ def simulate(
         )
         return run_native(
             plan, parameters, qhd_phase_values, carrier_changing_values, signal_changing_values,
-            carrier_matrix, packed_signal.template, packed_noise.template, noise_selection_vectors, sweep_key=sweep_key,
+            carrier_matrix, packed_signal.template, packed_noise.template, noise_selection_vectors,
         )
 
     # --------------------
@@ -570,9 +566,7 @@ def group_component_instructions(arrays):
         )
         output_positions.append(positions)
 
-    positions = np.concatenate(output_positions)
-    permutation = np.empty_like(positions)
-    permutation[positions] = np.arange(positions.size)
+    permutation = np.argsort(np.concatenate(output_positions))
     return None, tuple(groups), permutation, *placement
 
 
@@ -665,20 +659,23 @@ def run_build_step(
     simulation_arrays = {arg_names[i]: array for i, array in enumerate(all_arrays)}
     if signal_solver != "dense":
         template, updates, coupling = matrices[2], signal_arrays[3], signal_arrays[5]
-        if signal_solver == "packed":
-            pattern, packed = pack_optical_signal(matrices[1], len(template), updates, coupling)
-            simulation_arrays["packed_signal"] = packed
-        else:
-            pattern = build_signal_pattern(template, updates, coupling)
+        pattern = build_signal_pattern(template, updates, coupling)
         simulation_arrays["signal_sparsity"] = pattern
+        if signal_solver == "packed":
+            simulation_arrays["packed_signal"] = pack_signal_template(
+                template, pattern, updates, coupling, matrices[1].shape[0],
+            )
     if pack_noise:
-        simulation_arrays["packed_noise"] = pack_optical_noise(len(matrices[3]), noise_arrays[3])
+        simulation_arrays["packed_noise"] = pack_noise_template(matrices[3], noise_arrays[3])
 
     # Integer/bool index arrays become compile-time constants (see differometor/static.py).
     # The build works in NumPy; remaining float/complex data is handed to JAX here with a plain
     # device transfer (no compilation), so eager callers of simulate() still get JAX arrays.
-    simulation_arrays["parameters"] = StaticArray(simulation_arrays["parameters"])
     simulation_arrays = jax.tree_util.tree_map(_to_jax_data, make_static(simulation_arrays))
+    # The base parameter row is fixed by the setup (optimised/swept/linked entries are overwritten
+    # inside simulate). Making it static lets simulate() fold everything that depends only on
+    # fixed parameters at compile time. Changing it forces a recompile, never a stale result.
+    simulation_arrays["parameters"] = StaticArray(np.asarray(simulation_arrays["parameters"]))
     metadata = tuple(_to_jax_data(value) for value in metadata)  # port indices; port_to_index dict passes through
 
     if timeit:

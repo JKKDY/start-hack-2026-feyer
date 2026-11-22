@@ -1,0 +1,20 @@
+# Optimization milestones for run_linux.sh / run_windows.ps1 / make_table.py.
+# Format: label | commit | kind | extra environment (space separated) | description [| script]
+#   script: omitted -> the ORIGINAL benchmark.py from 3b538f0 (the scored benchmark);
+#           otherwise a script from the milestone's own tree, e.g. benchmark_native.py
+#   kind plain  : pure Python/JAX tree, nothing to build
+#   kind aot    : AOT branch; compiles differometor/_native_components.cpp in place
+#   kind native : C++ engine in native/; pip-installs native/ into the Python environment
+m0_original           | 3b538f0 | plain  |                                                                        | Original dense JAX solver
+m1_dense_tweaks       | 089afa2 | plain  |                                                                        | Dense JAX: one fewer noise solve, grouped components, detector selections without tiling
+m2_packed_sparse      | 47cc00a | plain  |                                                                        | Packed sparse signal + noise solver (JAX JIT)
+m3_baseline_optimized | 2960b9e | plain  |                                                                        | + static index arrays, refined sparse solves, NumPy build step, folded fixed parameters
+m4_aot_components     | 2e61add | aot    | DIFFEROMETOR_NATIVE=1                                                  | AOT branch: C++ component kernels, JAX glue
+m5_aot_flags_lureuse  | 8072817 | aot    | DIFFEROMETOR_NATIVE=1 XLA_FLAGS=--xla_backend_optimization_level=0     | AOT branch: + XLA optimization level 0, LU reuse in reverse mode
+m6_native_noflags     | b8bc5ef | native | DIFFEROMETOR_XLA_FLAGS=0                                               | Native C++ engine via JAX bridge, XLA flags disabled
+m7_native_flags       | b8bc5ef | native |                                                                        | Native C++ engine via JAX bridge (default XLA flags)
+m8_native_lu_fused    | 8d2f69f | native |                                                                        | + native left-looking sparse LU, one tape entry per frequency for signal + noise
+m9_one_refinement     | f7be1dc | native |                                                                        | + one iterative-refinement step for signal solves
+j7_jaxfree_native     | b8bc5ef | native |                                                                        | JAX-free `benchmark_native.py`, native C++ engine (not the scored benchmark) | benchmark_native.py
+j8_jaxfree_lu_fused   | 8d2f69f | native |                                                                        | JAX-free `benchmark_native.py`, + native LU, one tape entry per frequency | benchmark_native.py
+j9_jaxfree_one_refine | f7be1dc | native |                                                                        | JAX-free `benchmark_native.py`, + one refinement step | benchmark_native.py

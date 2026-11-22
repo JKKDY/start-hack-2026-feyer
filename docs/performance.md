@@ -2,6 +2,8 @@
 
 The current build is `baseline-optimized`. It combines the packed sparse solver, static index arrays, a NumPy build step, and fixed setup parameters folded into the compiled program. The original `benchmark.py` passes on it. On the laptop described below, the latest run took **9.243 s** including JIT and **0.272 s** warm. The original dense run took **63.13 s** including JIT and **33.278 s** warm. The [correctness harness](correctness-harness.md) passes all 13 setups at nominal and fuzzed parameters. The strict elementwise comparison of raw signal fields still reports differences in the sparse modes. See [Signal-field stability](#signal-field-stability) and [Profiling findings](profiling.md).
 
+For a coarse step-by-step map from the original solver to the native C++ engine (0.52 s first run in WSL), with a phase breakdown per milestone and scripts to rerun it, see [Optimization history](optimization-history.md).
+
 ## Accepted optimization history
 
 The table tracks cumulative builds on one pinned logical CPU of an Intel Core i7-11370H laptop (8 logical CPUs, 16 GB RAM), with native Windows 10, Python 3.12.10, JAX and JAXLIB 0.9.0, and double precision. Every run used the saved 3×3 UIFO, 101 frequencies, and 193 design variables. Timings are one complete first run and the median of three warm evaluations. The first-run total includes JIT tracing, lowering, and compilation.

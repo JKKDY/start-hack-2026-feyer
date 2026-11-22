@@ -240,6 +240,70 @@ Mac plain passed all 13 setups at five parameter points each. Worst sensitivity 
 
 Build the library once per compatible installation with `python -m differometor.rust_kernel.build` (Cargo and a C++17 compiler). The local Mac build took 6.877 s before benchmarking. Use `python benchmark.py` normally or `DIFFEROMETOR_NATIVE=1 python benchmark.py` for the full AOT backend. Use `DIFFEROMETOR_DISABLE_NATIVE=1` without selecting AOT to exercise the JAX fallback. Windows retains the pure JAX option.
 
+## Rust sparse sweep and native CPU pullback
+
+The control is `test/aot-flags-kernel` at `f750e82`. The implementation is on `experiment/rust-packed-solver`. The control already runs Rust optical coefficient kernels and tunes XLA for the CPU. Its default signal solve loops over frequencies in Python, calls SciPy SuperLU, and compiles the surrounding forward and reverse computations with JAX.
+
+The new default for a packed CPU run builds coefficient plans from the supplied topology and evaluates carrier, signal and noise coefficients and their adjoints with the generic Rust library. Rust drives the complex128 sparse sweep. It computes one column ordering per sparsity pattern within the sweep, reuses work buffers, and factors each frequency numerically. A small C++ binding calls SuperLU. Signal and detector solves share those factors, including residual refinement. The fused host pullback consumes the saved forward fields and rebuilds numeric factors during reverse. Python and NumPy still build topology and packed layouts, drive readout, and call LAPACK for the dense carrier. JAX retains the public API and implements forward-mode, higher-order and non-design derivatives through the general path. All setup, library loading and planning occur inside the original timed phases.
+
+### Measured increments
+
+Each cell gives complete first run / tracing and compilation / median warm run in seconds. Each process ran ten warm repeats. Rows are independent screens from different sessions, with the number of fresh processes per platform shown separately. The paired acceptance series below determines the release decision.
+
+| Change | Processes | M1 | Linux, CPU 0 |
+| --- | ---: | --- | --- |
+| Control | 3 | 1.381 / 0.661 / 0.197 | 1.892 / 1.051 / 0.333 |
+| Rust sparse sweep | 3 | 1.286 / 0.729 / 0.172 | 1.822 / 1.087 / 0.314 |
+| Reuse sparse ordering and workspace | 3 | 1.268 / 0.725 / 0.159 | 1.561 / 0.962 / 0.293 |
+| Call sparse solve directly from XLA | 3 | 1.310 / 0.776 / 0.150 | 1.594 / 1.007 / 0.263 |
+| Also move dense carrier solve behind XLA | 1 | 1.495 / 0.747 / 0.171 | 1.554 / 0.881 / 0.285 |
+| Expand Rust coefficient assembly in JAX | 1 | 2.038 / 0.759 / 0.274 | 1.256 / 0.472 / 0.305 |
+| Combine expanded assembly with direct XLA sparse and dense solves | 1 | 1.479 / 0.754 / 0.170 | 1.186 / 0.521 / 0.293 |
+| Fused host forward and reverse with Rust sweep | 3 | 0.664 / 0.123 / 0.153 | 0.776 / 0.154 / 0.289 |
+| Also use Rust for all three coefficient plans | 3 | 0.662 / 0.118 / 0.155 | 0.770 / 0.151 / 0.290 |
+
+A direct XLA sparse call improved warm execution but increased first-run time on both platforms. Moving more individual solves behind XLA still left the surrounding program to compile. Moving the boundary around the optical forward and design pullback produced the largest measured compilation saving. The optical graph builder remains in Python. Only sparse ordering and sweep planning were moved or reused.
+
+### Acceptance measurements
+
+Five alternating control/candidate pairs ran in fresh processes. The Mac used ordinary CPU scheduling on an eight-logical-CPU Apple M1 with 16 GiB RAM and macOS 26.5.2. Linux ran in an ARM64 Docker VM on that M1 with affinity restricted to logical CPU 0. Both used Python 3.12.16 and JAX/jaxlib 0.9.0. The original benchmark and both scored fixture hashes matched for every launch. All launches evaluated 101 frequencies, the 193-coordinate physical gradient and ten warm repeats.
+
+| Platform | Version | First run | Setup | Optical build within setup | Trace and compile | Warm |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| mac | base | 1.1997 | 0.4494 | 0.0430 | 0.5686 | 0.1779 |
+| mac | final | 0.5864 | 0.3370 | 0.0568 | 0.1030 | 0.1454 |
+| linux | base | 1.3371 | 0.3218 | 0.0487 | 0.7170 | 0.2869 |
+| linux | final | 0.6675 | 0.2657 | 0.0485 | 0.1248 | 0.2616 |
+
+The five ordinary Mac candidate totals were 0.619, 0.586, 0.578, 0.599 and 0.573 seconds. A separate plain run in the real checkout took 0.847 seconds, with a 0.139-second warm median. The five Linux candidate totals were 0.636, 0.632, 0.680, 0.668 and 0.893 seconds. The optical build alone increased by 14 ms on the Mac, while total setup decreased by 112 ms. Each candidate's warm median beat its paired control. The installation-time Rust kernel build took 9.298 seconds on macOS and 11.305 seconds on Linux.
+
+All benchmark reference and finite-difference checks passed. On both systems the full repository harness passed and all six unit tests passed, including complex adjoints and JAX differentiation transforms. Direct control/candidate comparisons covered every field and gradient entry on the scored setup at its supplied parameters and with `mb11.tuning` increased by 0.002. The table shows the worst difference over both points and platforms. Loss is near zero and is reported in absolute units.
+
+| Quantity | Difference |
+| --- | ---: |
+| carrier (relative L2) | 0 |
+| signal (relative L2) | 3.79e-10 |
+| noise (relative L2) | 2.74e-10 |
+| sensitivity (relative L2) | 6.49e-11 |
+| powers (relative L2) | 0 |
+| loss (absolute) | 9.84e-12 |
+| gradient (relative L2) | 1.08e-09 |
+
+The largest harness sensitivity and gradient errors occurred in the near-null Voyager FM case. They were 0.0636 and 0.00142 on macOS, and 0.845 and 0.925 on Linux. The stored tolerances at those points are 27.05 and 9.01, respectively. This case offers much weaker evidence of relative accuracy than the scored field-by-field comparison. The Mac fallback with native kernels disabled also passed the full harness.
+
+Install Cargo, a C++17 compiler and SuperLU development headers (`brew install superlu` on Apple Silicon or `apt install libsuperlu-dev` on Debian). From a Python 3.12 virtual environment in the checkout, run the following commands.
+
+```bash
+python -m pip install -r requirements.txt
+python -m pip install -e .
+python -m differometor.rust_kernel.build
+python benchmark.py
+python tests/check_general.py --suite all
+PYTHONPATH=. JAX_PLATFORMS=cpu python -m unittest discover -s tests
+```
+
+On Linux run `python benchmark.py --cpus 1` inside a container pinned to a single allowed CPU. Apply the same Python environment and each revision's own native build to the control. The Rust sparse solver is optional and requires a compatible system SuperLU installation.
+
 ## Benchmarking further changes
 
 For a quick cold-start measurement, run `python benchmark_slim.py` in a fresh process. The [slim runner](../benchmark_slim.py) uses the public UIFO fixture and the scored benchmark's forward, readout and gradient functions. Its single wall-clock time includes imports, CPU initialization, setup, JIT and transfer of the results back to the host. Use `benchmark.py` for the scored result, correctness checks, warm repeats and per-phase timings.

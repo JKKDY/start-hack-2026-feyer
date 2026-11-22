@@ -24,4 +24,4 @@ include = ["differometor*"]
 exclude = ["examples/results", "media"]
 
 [tool.setuptools.package-data]
-"differometor.rust_kernel" = ["Cargo.toml", "Cargo.lock", "bridge.cc", "src/*.rs"]
+"differometor.rust_kernel" = ["Cargo.toml", "Cargo.lock", "bridge.cc", "sparse_bridge.cc", "src/*.rs"]

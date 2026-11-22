@@ -215,16 +215,24 @@ def run(plan, base, phases, carrier_sweep, signal_sweep, carrier_template,
         signal_template, noise_template, selection_template):
     from .rust_kernel import installed_kernel
     library = installed_kernel()
-    groups, order = plan.signal_instruction
-    if library and any(group is not None for group in groups):
+    if library:
         from ._rust_sweep import Sweep
-        varying = np.union1d(plan.carrier_parameters, plan.signal_parameters)
-        # Invariant cotangents may only be combined within one carrier sweep.
-        if carrier_sweep.shape[1] == 1 and all(
-            group is None or group[0].shape[1] == 7 for group in groups
-        ):
-            plan = plan._replace(signal_instruction=Sweep(
-                plan.signal_instruction, varying, base.shape[-1], library))
+        signal_varying = np.union1d(plan.carrier_parameters, plan.signal_parameters)
+        if carrier_sweep.shape[1] > 1:
+            # Separate cotangents belong to each carrier row before unexpand.
+            signal_varying = np.arange(base.shape[-1])
+        def prepare(instruction, varying):
+            groups, _ = instruction
+            if any(g is not None for g in groups) and all(
+                g is None or g[0].shape[1] == 7 for g in groups
+            ):
+                return Sweep(instruction, varying, base.shape[-1], library)
+            return instruction
+        plan = plan._replace(
+            carrier_instruction=prepare(plan.carrier_instruction, plan.carrier_parameters),
+            signal_instruction=prepare(plan.signal_instruction, signal_varying),
+            noise_instruction=prepare(plan.noise_instruction, signal_varying),
+        )
     nc = carrier_sweep.shape[1]
     nf = nc * signal_sweep.shape[1]
     n = carrier_template.shape[0]

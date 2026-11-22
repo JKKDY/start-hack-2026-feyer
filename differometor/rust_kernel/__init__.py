@@ -19,6 +19,8 @@ def kernel_path():
         "generate.py",
         "bridge.cc",
         "src/lib.rs",
+        "src/sparse.rs",
+        "sparse_bridge.cc",
         "../components.py",
         "../native_coefficients.py",
         "../_rust_sweep.py",

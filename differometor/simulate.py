@@ -243,7 +243,7 @@ def expand_parameters(array: jnp.ndarray, indices: jnp.ndarray, values: jnp.ndar
     return tiled_array.at[row_indices, column_indices].set(flat_values)
 
 
-def simulate(
+def _simulate_impl(
     # prepared arrays
     optimized_parameters: jnp.ndarray,
     optimized_parameter_indices: jnp.ndarray,
@@ -284,94 +284,8 @@ def simulate(
     signal_sparsity=None,
     packed_signal=None,
     packed_noise=None,
+    _native=False,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """
-    Run one full simulation pass: carrier, signal, and quantum noise.
-
-    Parameters
-    ----------
-    optimized_parameters : jnp.ndarray
-        Optimized parameter values provided by an optimizer or sampling routine,
-        shape (OPV,) or (num_ranges, OPV) in outer vectorization contexts.
-    optimized_parameter_indices : jnp.ndarray
-        Indices into `parameters` for parameters that are driven by optimized values,
-        shape (OP,).
-    optimized_value_indices : jnp.ndarray
-        Indices into `optimized_parameters` mapping each optimized parameter to
-        its source value, shape (OP,). This supports shared optimized values.
-    carrier_changing_parameter_indices : jnp.ndarray
-        Indices into `parameters` that change for the carrier sweep, shape (CCP,).
-    carrier_changing_values : jnp.ndarray
-        Values for those carrier-changing parameters, shape (CCP, CV).
-    signal_changing_parameter_indices : jnp.ndarray
-        Indices into `parameters` that change for the signal sweep, shape (SCP,).
-    signal_changing_values : jnp.ndarray
-        Values for those signal-changing parameters, shape (SCP, SV).
-
-    parameters : jnp.ndarray
-        Base parameter array, shape (1, P). It is expanded internally.
-    carrier_matrix : jnp.ndarray
-        Base carrier augmented matrix, shape (CN, CN + 1).
-    signal_matrix : jnp.ndarray
-        Base signal augmented matrix, shape (SN, SN + 1).
-    noise_matrix : jnp.ndarray
-        Noise source covariance matrix, shape (NN, NN) or broadcastable for vmap.
-    signal_sparsity : tuple of arrays or None
-        Optional column-compressed signal pattern for the experimental CPU solver.
-    packed_signal : PackedSignal or None
-        Optional coefficient template and scatter slots for sparse assembly.
-    packed_noise : PackedNoise or None
-        Optional occupied covariance entries for direct noise contraction.
-    noise_selection_vectors : jnp.ndarray
-        Detector selection vectors, shape (D, 1, setup_size).
-    qhd_parameter_indices : jnp.ndarray
-        Indices of quadrature-homodyne-detector phase parameters in `parameters`,
-        shape (Q,).
-    qhd_placing_indices : jnp.ndarray
-        Indices describing where detector phases are applied into
-        `noise_selection_vectors`, shape (Q, 3). Each row contains:
-        (detector_index, row_index, column_index).
-    linked_indices : jnp.ndarray
-        Parameter indices used as inputs to linking functions, shape (L,).
-    linking_function_indices : jnp.ndarray
-        Function selectors for linking functions, shape (L,).
-    indices_to_link : jnp.ndarray
-        Parameter indices to receive outputs of linking functions, shape (L,).
-
-    carrier_function_input_indices, carrier_function_indices, carrier_output_indices,
-    carrier_matrix_indices :
-        Indexing and function-selection arrays used by `update` to fill the carrier matrix.
-
-    signal_function_input_indices, signal_function_indices, signal_output_indices,
-    signal_matrix_indices :
-        Indexing and function-selection arrays used by `update` to fill the signal matrix.
-
-    signal_carrier_indices : jnp.ndarray
-        Indices selecting the carrier solution entries used to scale signal connectors.
-    signal_carrier_placing_indices : tuple[jnp.ndarray, jnp.ndarray]
-        Matrix indices locating the signal connector entries that must be scaled by carrier.
-
-    noise_function_input_indices, noise_function_indices, noise_output_indices,
-    noise_system_matrix_indices :
-        Indexing and function-selection arrays used by `update` to fill the noise matrix.
-
-    Returns
-    -------
-    carrier : jnp.ndarray
-        Carrier solution, transposed to shape (CN, CV).
-    signal : jnp.ndarray
-        Signal solution, transposed to shape (SN, SV).
-    noise : jnp.ndarray
-        Quantum noise amplitude spectral density, shape (D, SV) after squeeze.
-
-    Notes
-    -----
-    - Linking functions are applied before parameter expansion so they operate on a single row.
-    - The signal path is always executed (even if effectively empty) to avoid conditionals
-      that would force compilation of branches with empty shapes.
-    - Conjugation and block manipulation follow the conventions used for upper and lower
-      sidebands in frequency-domain interferometer models.
-    """
     # Index arrays from `run_build_step` arrive as StaticArray nodes (compile-time
     # constants under jit); turn them back into plain NumPy arrays. No-op otherwise.
     (
@@ -426,7 +340,7 @@ def simulate(
     qhd_phase_values = jnp.exp(1j * jnp.radians(parameters[0, qhd_parameter_indices]))
 
     if (
-        os.environ.get("DIFFEROMETOR_NATIVE") == "1"
+        _native
         and packed_signal is not None and packed_noise is not None
         and packed_noise.update_slots is not None
         and noise_output_indices is not None and signal_output_indices is not None
@@ -594,6 +508,163 @@ def simulate(
     return carrier.T, signal.T, noise.squeeze()
 
 
+def _auto_cpu():
+    if os.environ.get("DIFFEROMETOR_NATIVE") is not None or jax.config.jax_platforms != "cpu":
+        return False
+    from .sparse_signal import _sweep_kernel
+    from importlib.util import find_spec
+    return _sweep_kernel() is not None and find_spec("differometor._native_components") is not None
+
+
+def simulate(
+    # prepared arrays
+    optimized_parameters: jnp.ndarray,
+    optimized_parameter_indices: jnp.ndarray,
+    optimized_value_indices: jnp.ndarray,
+    carrier_changing_parameter_indices: jnp.ndarray,
+    carrier_changing_values: jnp.ndarray,
+    signal_changing_parameter_indices: jnp.ndarray,
+    signal_changing_values: jnp.ndarray,
+    # matrices
+    parameters: jnp.ndarray,
+    carrier_matrix: jnp.ndarray,
+    signal_matrix: jnp.ndarray,
+    noise_matrix: jnp.ndarray,
+    noise_selection_vectors: jnp.ndarray,
+    qhd_parameter_indices: jnp.ndarray,
+    qhd_placing_indices: jnp.ndarray,
+    linked_indices: jnp.ndarray,
+    linking_function_indices: jnp.ndarray,
+    indices_to_link: jnp.ndarray,
+    # carrier arrays
+    carrier_function_input_indices: jnp.ndarray,
+    carrier_function_indices: jnp.ndarray,
+    carrier_output_indices: tuple[jnp.ndarray, jnp.ndarray],
+    carrier_matrix_indices: tuple[jnp.ndarray, jnp.ndarray],
+    # signal arrays
+    signal_function_input_indices: jnp.ndarray,
+    signal_function_indices: jnp.ndarray,
+    signal_output_indices: tuple[jnp.ndarray, jnp.ndarray],
+    signal_matrix_indices: tuple[jnp.ndarray, jnp.ndarray],
+    signal_carrier_indices: jnp.ndarray,
+    signal_carrier_placing_indices: tuple[jnp.ndarray, jnp.ndarray],
+    # noise arrays
+    noise_function_input_indices: jnp.ndarray,
+    noise_function_indices: jnp.ndarray,
+    noise_output_indices: tuple[jnp.ndarray, jnp.ndarray],
+    noise_system_matrix_indices: tuple[jnp.ndarray, jnp.ndarray],
+    *,
+    signal_sparsity=None,
+    packed_signal=None,
+    packed_noise=None,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """
+    Run one full simulation pass: carrier, signal, and quantum noise.
+
+    Parameters
+    ----------
+    optimized_parameters : jnp.ndarray
+        Optimized parameter values provided by an optimizer or sampling routine,
+        shape (OPV,) or (num_ranges, OPV) in outer vectorization contexts.
+    optimized_parameter_indices : jnp.ndarray
+        Indices into `parameters` for parameters that are driven by optimized values,
+        shape (OP,).
+    optimized_value_indices : jnp.ndarray
+        Indices into `optimized_parameters` mapping each optimized parameter to
+        its source value, shape (OP,). This supports shared optimized values.
+    carrier_changing_parameter_indices : jnp.ndarray
+        Indices into `parameters` that change for the carrier sweep, shape (CCP,).
+    carrier_changing_values : jnp.ndarray
+        Values for those carrier-changing parameters, shape (CCP, CV).
+    signal_changing_parameter_indices : jnp.ndarray
+        Indices into `parameters` that change for the signal sweep, shape (SCP,).
+    signal_changing_values : jnp.ndarray
+        Values for those signal-changing parameters, shape (SCP, SV).
+
+    parameters : jnp.ndarray
+        Base parameter array, shape (1, P). It is expanded internally.
+    carrier_matrix : jnp.ndarray
+        Base carrier augmented matrix, shape (CN, CN + 1).
+    signal_matrix : jnp.ndarray
+        Base signal augmented matrix, shape (SN, SN + 1).
+    noise_matrix : jnp.ndarray
+        Noise source covariance matrix, shape (NN, NN) or broadcastable for vmap.
+    signal_sparsity : tuple of arrays or None
+        Optional column-compressed signal pattern for the experimental CPU solver.
+    packed_signal : PackedSignal or None
+        Optional coefficient template and scatter slots for sparse assembly.
+    packed_noise : PackedNoise or None
+        Optional occupied covariance entries for direct noise contraction.
+    noise_selection_vectors : jnp.ndarray
+        Detector selection vectors, shape (D, 1, setup_size).
+    qhd_parameter_indices : jnp.ndarray
+        Indices of quadrature-homodyne-detector phase parameters in `parameters`,
+        shape (Q,).
+    qhd_placing_indices : jnp.ndarray
+        Indices describing where detector phases are applied into
+        `noise_selection_vectors`, shape (Q, 3). Each row contains:
+        (detector_index, row_index, column_index).
+    linked_indices : jnp.ndarray
+        Parameter indices used as inputs to linking functions, shape (L,).
+    linking_function_indices : jnp.ndarray
+        Function selectors for linking functions, shape (L,).
+    indices_to_link : jnp.ndarray
+        Parameter indices to receive outputs of linking functions, shape (L,).
+
+    carrier_function_input_indices, carrier_function_indices, carrier_output_indices,
+    carrier_matrix_indices :
+        Indexing and function-selection arrays used by `update` to fill the carrier matrix.
+
+    signal_function_input_indices, signal_function_indices, signal_output_indices,
+    signal_matrix_indices :
+        Indexing and function-selection arrays used by `update` to fill the signal matrix.
+
+    signal_carrier_indices : jnp.ndarray
+        Indices selecting the carrier solution entries used to scale signal connectors.
+    signal_carrier_placing_indices : tuple[jnp.ndarray, jnp.ndarray]
+        Matrix indices locating the signal connector entries that must be scaled by carrier.
+
+    noise_function_input_indices, noise_function_indices, noise_output_indices,
+    noise_system_matrix_indices :
+        Indexing and function-selection arrays used by `update` to fill the noise matrix.
+
+    Returns
+    -------
+    carrier : jnp.ndarray
+        Carrier solution, transposed to shape (CN, CV).
+    signal : jnp.ndarray
+        Signal solution, transposed to shape (SN, SV).
+    noise : jnp.ndarray
+        Quantum noise amplitude spectral density, shape (D, SV) after squeeze.
+
+    Notes
+    -----
+    - Linking functions are applied before parameter expansion so they operate on a single row.
+    - The signal path is always executed (even if effectively empty) to avoid conditionals
+      that would force compilation of branches with empty shapes.
+    - Conjugation and block manipulation follow the conventions used for upper and lower
+      sidebands in frequency-domain interferometer models.
+    """
+    arrays = locals()
+    if not _auto_cpu():
+        return _simulate_impl(**arrays, _native=os.environ.get("DIFFEROMETOR_NATIVE") == "1")
+    design = arrays.get("optimized_parameters")
+    if (design is None or arrays.get("packed_signal") is None or arrays.get("packed_noise") is None
+            or arrays.get("noise_output_indices") is None or arrays.get("signal_output_indices") is None
+            or not isinstance(arrays.get("optimized_parameter_indices"), StaticArray)
+            or not isinstance(arrays.get("parameters"), StaticArray)
+            or arrays["parameters"].array.dtype != np.complex128
+            or not isinstance(arrays["packed_signal"].update_slots, StaticArray)):
+        return _simulate_impl(**arrays)
+    from ._native_ad import evaluate
+    arrays.pop("optimized_parameters")
+    def native(p, rest):
+        return _simulate_impl(optimized_parameters=p, **rest, _native=True)
+    def reference(p, rest):
+        return _simulate_impl(optimized_parameters=p, **rest)
+    return evaluate(design, arrays, native, reference)
+
+
 def group_component_instructions(arrays):
     """Group calls by component function and restore the original scatter order."""
     function_inputs, functions, (output_rows, output_columns), *placement = arrays
@@ -720,7 +791,7 @@ def run_build_step(
 
     # Keep the original write order for repeated destinations. Unique writes can
     # go directly from function-group order to their packed matrix slots.
-    use_aot = os.environ.get("DIFFEROMETOR_NATIVE") == "1"
+    use_aot = os.environ.get("DIFFEROMETOR_NATIVE") == "1" or _auto_cpu()
     if signal_solver == "packed" and not use_aot:
         packed = simulation_arrays["packed_signal"]
         if np.unique(packed.update_slots).size == packed.update_slots.size:

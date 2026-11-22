@@ -1,13 +1,11 @@
 """Experimental CPU signal solver with a shared sparse factorization."""
 
-from functools import partial
+from functools import lru_cache, partial
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from scipy.sparse import csc_matrix
-from scipy.sparse.linalg import splu
 
 
 class PackedSignal(NamedTuple):
@@ -111,13 +109,45 @@ def _refine(solve, apply, rhs, solution):
     return solution
 
 
+@lru_cache(maxsize=1)
+def _sweep_kernel():
+    import ctypes
+    from .rust_kernel import installed_kernel
+    path = installed_kernel()
+    if path is None:
+        return None
+    try:
+        entry = ctypes.CDLL(str(path.with_name("sparse-" + path.name))).optical_sweep
+    except OSError:
+        return None
+    entry.restype = ctypes.c_int
+    entry.argtypes = [ctypes.c_size_t] * 5 + [ctypes.c_bool] + [ctypes.c_void_p] * 7
+    return entry
+
+
 def _factor_and_solve(coefficients, rows, pointers, signal_rhs, detector_rhs, *, transpose):
     coefficients, rows, pointers, signal_rhs, detector_rhs = map(
         np.asarray, (coefficients, rows, pointers, signal_rhs, detector_rhs)
     )
+    size = signal_rhs.shape[1]
+    kernel = _sweep_kernel()
+    batch = len(signal_rhs)
+    if (kernel is not None and coefficients.dtype == signal_rhs.dtype == detector_rhs.dtype == np.complex128
+            and coefficients.shape == (batch, len(rows)) and pointers.shape == (size + 1,)
+            and detector_rhs.ndim == 3 and detector_rhs.shape[:2] == (batch, size)
+            and rows.ndim == 1 and rows.dtype == pointers.dtype == np.int32):
+        signal = np.empty(signal_rhs.shape, dtype=signal_rhs.dtype)
+        detectors = np.empty(detector_rhs.shape, dtype=detector_rhs.dtype)
+        inputs = [np.ascontiguousarray(a) for a in (coefficients, rows, pointers, signal_rhs, detector_rhs)]
+        status = kernel(batch, size, len(rows), detector_rhs.shape[2], REFINEMENT_STEPS, transpose,
+                        *(a.ctypes.data for a in (*inputs, signal, detectors)))
+        if status == 0:
+            return signal, detectors
+
+    from scipy.sparse import csc_matrix
+    from scipy.sparse.linalg import splu
     signal = np.empty_like(signal_rhs)
     detectors = np.empty_like(detector_rhs)
-    size = signal_rhs.shape[1]
     for frequency, entries in enumerate(coefficients):
         matrix = csc_matrix((entries, rows, pointers), shape=(size, size))
         factors = splu(matrix)

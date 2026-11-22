@@ -220,6 +220,23 @@ Seven interleaved pairs used the original benchmark, one pinned Windows logical 
 
 Reuse was faster cold in five of seven pairs, with a 0.037 s median paired saving. All scored runs and all 13 validation setups with their fuzzed points passed. The maximum scored log-sensitivity error was 5.37 × 10⁻⁶ and the gradient spot-check error was 1.06 × 10⁻⁸ in both modes. The out-of-order regression verifies a hit for the matching batch and exact results after eviction and repeated use. An alternate experiment copied sparse factor arrays into the JAX residual. It passed validation and cost more warm time than refactorization, so the implementation retains the SuperLU objects.
 
+###### Full benchmark rerun
+
+One fresh run of the original `benchmark.py` at `6b54b8d` on 22 November 2026 used the native backend, forward LU reuse, and XLA level 0 on the same pinned Windows CPU. The total cold time was **1.624361 s**, with **0.476297 s** of JIT. Subtracting the recorded import phase gives **0.846406 s**.
+
+| Stage | Trace / lower (s) | Compile (s) | Cold setup or execution (s) | Warm median (s) |
+| --- | ---: | ---: | ---: | ---: |
+| Python and library imports | — | — | 0.777955 | — |
+| CPU backend initialization | — | — | 0.006138 | — |
+| Read and parse inputs | — | — | 0.002884 | — |
+| Build optical setup and prepare inputs | — | — | 0.087157 | — |
+| Forward simulation and derivative state | 0.063781 | 0.098482 | 0.166843 | 0.151179 |
+| Sensitivity, powers, and loss | 0.033486 | 0.139054 | 0.000819 | 0.000501 |
+| Reverse-mode gradient | 0.019243 | 0.122251 | 0.105975 | 0.115731 |
+| Transfer results to host | — | — | 0.000293 | 0.000166 |
+
+The three complete warm runs took 0.269244 s, 0.267424 s, and 0.267389 s. Their median was **0.267424 s**. All optical outputs and all 193 gradient entries were finite. The maximum log-sensitivity error was 5.374239 × 10⁻⁶. The `mb11.tuning` gradient spot check passed with absolute errors of 8.788 × 10⁻⁹ and 1.064 × 10⁻⁸ at finite-difference steps of 0.001 and 0.0005 respectively.
+
 ## Benchmarking further changes
 
 For a quick cold-start measurement, run `python benchmark_slim.py` in a fresh process. The [slim runner](../benchmark_slim.py) uses the public UIFO fixture and the scored benchmark's forward, readout and gradient functions. Its single wall-clock time includes imports, CPU initialization, setup, JIT and transfer of the results back to the host. Use `benchmark.py` for the scored result, correctness checks, warm repeats and per-phase timings.

@@ -183,7 +183,7 @@ def set_instructions(
     if function_input_indices.shape[1] < function_input_indices_shape:
         pad_width = function_input_indices_shape - function_input_indices.shape[1]
         function_input_indices = np.concatenate(
-            [function_input_indices, np.zeros((function_input_indices.shape[0], pad_width))],
+            [function_input_indices, np.zeros((function_input_indices.shape[0], pad_width), dtype=function_input_indices.dtype)],
             axis=1,
         )
 
@@ -1379,14 +1379,14 @@ def pairs_to_arrays(
     optimized_parameter_indices = []
     optimization_value_indices = []
 
-    carrier_components = []
+    carrier_components = set()
     carrier_changing_parameter_indices = []
     carrier_arrays = defaultdict(list)
 
     signal_changing_parameter_indices = []
     signal_arrays = defaultdict(list)
 
-    noise_components = []
+    noise_components = set()
     noise_arrays = defaultdict(list)
 
     if optimization_pairs is None:
@@ -1412,7 +1412,7 @@ def pairs_to_arrays(
             individual_rows = len(np.unique(instruction["output_row_indices"]))
             signal_component_number += individual_rows
         else:
-            signal_arrays["output_row_indices"].append(np.ones(len(instruction["output_column_indices"])) * signal_component_number)
+            signal_arrays["output_row_indices"].append(np.full(len(instruction["output_column_indices"]), signal_component_number, dtype=int))
             signal_component_number += 1
 
         signal_arrays["system_matrix_row_indices"].append(instruction["system_matrix_row_indices"])
@@ -1423,7 +1423,7 @@ def pairs_to_arrays(
             signal_arrays["carrier_row_indices"].append(instruction["carrier_row_indices"])
             signal_arrays["carrier_column_indices"].append(instruction["carrier_column_indices"])
 
-    def append_information(instructions: dict, arrays: dict, component: str, components: list | None = None):
+    def append_information(instructions: dict, arrays: dict, component: str, components: set):
         """
         Helper to append one component's instruction data to a target arrays dictionary.
 
@@ -1436,7 +1436,7 @@ def pairs_to_arrays(
         component:
             Component key to append.
         components:
-            List used as a "seen" set to avoid adding the same component multiple times.
+            Set of components already emitted to avoid adding the same component multiple times.
 
         Returns
         -------
@@ -1447,13 +1447,13 @@ def pairs_to_arrays(
 
         if component in components:
             return None
-        components.append(component)
+        components.add(component)
 
         arrays["function_input_indices"].append(component_function_input_indices)
         arrays["function_indices"].extend(instructions[component]["function_indices"])
         arrays["output_column_indices"].append(instructions[component]["output_column_indices"])
         arrays["output_row_indices"].append(
-            np.ones(len(instructions[component]["output_column_indices"])) * (len(components) - 1)
+            np.full(len(instructions[component]["output_column_indices"]), len(components) - 1, dtype=int)
         )
         arrays["system_matrix_row_indices"].append(instructions[component]["system_matrix_row_indices"])
         arrays["system_matrix_column_indices"].append(instructions[component]["system_matrix_column_indices"])
@@ -1463,21 +1463,18 @@ def pairs_to_arrays(
         append_information(noise_instructions, noise_arrays, component, noise_components)
 
     # Compile optimized parameter indices and include any carrier-side components that need updating.
+    # Preserve list.index's first occurrence when multiple names are equal.
+    positions = {}
+    for index, name in enumerate(parameter_names):
+        positions.setdefault(name, index)
+    signal_components = set(signal_components)
     for ix, optimization_pair in enumerate(optimization_pairs):
-        if not isinstance(optimization_pair[0], list):
-            optimized_component, optimized_parameter = optimization_pair
-            try:
-                optimized_parameter_indices.append(parameter_names.index(f"{optimized_component}_{optimized_parameter}"))
+        members = optimization_pair if isinstance(optimization_pair[0], list) else (optimization_pair,)
+        for optimized_component, optimized_parameter in members:
+            position = positions.get(f"{optimized_component}_{optimized_parameter}")
+            if position is not None:
+                optimized_parameter_indices.append(position)
                 optimization_value_indices.append(ix)
-            except ValueError:
-                pass
-        else:
-            for optimized_component, optimized_parameter in optimization_pair:
-                try:
-                    optimized_parameter_indices.append(parameter_names.index(f"{optimized_component}_{optimized_parameter}"))
-                    optimization_value_indices.append(ix)
-                except ValueError:
-                    pass
 
         if optimized_component not in signal_components and optimized_component in parameter_instructions:
             append_information(parameter_instructions, carrier_arrays, optimized_component, carrier_components)
@@ -1512,10 +1509,10 @@ def pairs_to_arrays(
         if len(arrays["function_input_indices"]) == 0:
             # Dummy update that leaves matrices unchanged.
             return (
-                np.array([[0, 0, 0]]),
-                np.array([FUNCTIONS.index(dummy_function)]),
-                np.array([[0], [0]]),
-                np.array([[0], [0]]),
+                np.asarray([[0, 0, 0]]),
+                np.asarray([FUNCTIONS.index(dummy_function)]),
+                np.asarray([[0], [0]]),
+                np.asarray([[0], [0]]),
             )
 
         function_input_indices = np.vstack(arrays["function_input_indices"])
@@ -1524,8 +1521,8 @@ def pairs_to_arrays(
 
         if signal:
             # Dummy carrier coupling values if none are required.
-            carrier_solution_indices = np.array([0])
-            carrier_solution_placing_indices = np.array([[0], [-1]])
+            carrier_solution_indices = np.asarray([0])
+            carrier_solution_placing_indices = np.asarray([[0], [-1]])
 
             if "carrier_indices" in arrays:
                 carrier_solution_indices = np.concatenate(arrays["carrier_indices"])
@@ -1534,27 +1531,27 @@ def pairs_to_arrays(
                 )
 
             return (
-                np.array(function_input_indices, dtype=int),
-                np.array(arrays["function_indices"], dtype=int),
-                np.array(output_indices, dtype=int),
-                np.array(system_matrix_indices, dtype=int),
-                np.array(carrier_solution_indices, dtype=int),
-                np.array(carrier_solution_placing_indices, dtype=int),
+                np.asarray(function_input_indices, dtype=int),
+                np.asarray(arrays["function_indices"], dtype=int),
+                np.asarray(output_indices, dtype=int),
+                np.asarray(system_matrix_indices, dtype=int),
+                np.asarray(carrier_solution_indices, dtype=int),
+                np.asarray(carrier_solution_placing_indices, dtype=int),
             )
 
         return (
-            np.array(function_input_indices, dtype=int),
-            np.array(arrays["function_indices"], dtype=int),
-            np.array(output_indices, dtype=int),
-            np.array(system_matrix_indices, dtype=int),
+            np.asarray(function_input_indices, dtype=int),
+            np.asarray(arrays["function_indices"], dtype=int),
+            np.asarray(output_indices, dtype=int),
+            np.asarray(system_matrix_indices, dtype=int),
         )
 
     return (
         (
-            np.array(optimized_parameter_indices, dtype=int),
-            np.array(optimization_value_indices, dtype=int),
-            np.array(carrier_changing_parameter_indices, dtype=int),
-            np.array(signal_changing_parameter_indices, dtype=int),
+            np.asarray(optimized_parameter_indices, dtype=int),
+            np.asarray(optimization_value_indices, dtype=int),
+            np.asarray(carrier_changing_parameter_indices, dtype=int),
+            np.asarray(signal_changing_parameter_indices, dtype=int),
         ),
         combine_arrays(carrier_arrays),
         combine_arrays(signal_arrays, signal=True),

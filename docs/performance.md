@@ -325,6 +325,27 @@ All 13 reference cases passed at all five parameter points on both platforms, as
 
 Follow the installation steps above using `brew install suite-sparse` or `apt install libsuitesparse-dev`, then run `python -m differometor.rust_kernel.build`. The Mac command is `python benchmark.py`. On Linux use `python benchmark.py --cpus 1`. The independent final Mac confirmation from the real checkout took 0.833 s.
 
+### Cold input preparation after the KLU change
+
+Branch `experiment/cold-input-setup` uses `6592abc` as the control. Parameter preparation builds a first-occurrence name index, tracks emitted components in sets, and keeps integer instruction arrays in integer form through stacking. Noise packing sorts flat integer keys while preserving lexicographic coordinate order, negative coordinates and the inverse map for repeated writes. The public dense templates, JAX arrays, physical engine and derivative rules are unchanged.
+
+Five alternating fresh-process pairs used the original benchmark, 101 frequencies, 193 design coordinates and ten warm repeats. Columns are medians in seconds. The Mac was an Apple M1 with normal scheduling, eight logical CPUs, 16 GiB RAM and macOS 26.5.2. Linux was an ARM64 LinuxKit VM on the same host pinned to logical CPU 0. Both ran Python 3.12.16 and JAX/jaxlib 0.9.0 with the existing installation-stage KLU build.
+
+| Platform | Revision | Complete | Setup | Optical input build | Trace and compile | Warm |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| M1 | Control | 0.4574 | 0.2889 | 0.0411 | 0.0971 | 0.0674 |
+| M1 | Candidate | 0.4528 | 0.2816 | 0.0399 | 0.0958 | 0.0676 |
+| Linux CPU 0 | Control | 0.5090 | 0.2461 | 0.0434 | 0.1214 | 0.1319 |
+| Linux CPU 0 | Candidate | 0.5002 | 0.2448 | 0.0424 | 0.1196 | 0.1311 |
+
+In 101 interleaved Mac microbenchmarks, median parameter mapping fell from 1.840 to 1.117 ms and noise packing from 0.074 to 0.019 ms. A mapping-only fresh Mac screen took 0.737 s complete, 0.177 s compilation and 0.070 s warm. A separate plain run of the combined change in the real checkout took 0.474 s. The candidate won three of five paired totals on the Mac and four of five on Linux. The isolated improvements explain roughly 0.8 ms of setup. Fresh-process variability contributes to the larger differences between total medians.
+
+In an independent Mac control diagnostic, imports took 240 ms, CPU initialization 2.81 ms, fixture parsing 1.51 ms and the first scored Python-list conversion to JAX 14.07 ms. The scorer imports JAX before the repository. An import trace attributed 445 ms to JAX and 5 ms to Differometor under instrumentation. Within the 15.20 ms synchronized library build, graph construction took 5.58 ms, native library loading 3.89 ms, CSC construction 0.78 ms, signal packing 0.16 ms and noise packing 0.44 ms. Large zero allocations returned in 0.02 ms, diagonal writes took 0.66 ms, instrumented concatenations 0.44 ms and JAX data conversions 0.78 ms. These nested figures overlap. Allocation alone excludes later page touches. The measured costs supported retaining the dense public templates.
+
+The historical 2.580 s launch included 1.696 s in the scorer's combined build phase. It has no internal trace. A separate instrumented control attributed 530 ms to the scorer's five JAX conversions and 70 ms to the library build. This demonstrates first-use variability but cannot identify the cause of the historical outlier.
+
+Both generality suites passed at all 65 points. Worst sensitivity/gradient harness errors remained in the known near-null Voyager case (0.0663/0.00144 on Mac and 0.846/0.924 on Linux). All seven physical outputs including loss and full gradient agreed exactly with the control at nominal and perturbed scored parameters on both systems. All 13 prepared layouts and metadata matched the control byte for byte with a fixed diagnostic hash seed. The original sensitivity and finite-difference checks passed. Reproduce with the KLU installation above and plain `python benchmark.py` on the Mac or `python benchmark.py --cpus 1` on Linux.
+
 ## Benchmarking further changes
 
 For a quick cold-start measurement, run `python benchmark_slim.py` in a fresh process. The [slim runner](../benchmark_slim.py) uses the public UIFO fixture and the scored benchmark's forward, readout and gradient functions. Its single wall-clock time includes imports, CPU initialization, setup, JIT and transfer of the results back to the host. Use `benchmark.py` for the scored result, correctness checks, warm repeats and per-phase timings.

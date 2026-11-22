@@ -27,8 +27,18 @@ def pack_noise_template(template, update_indices, *, zero_template=False):
     matrix = np.asarray(template)
     initial = np.empty((2, 0), dtype=int) if zero_template else np.asarray(np.nonzero(matrix))
     updates = np.asarray(update_indices)
-    coordinates, inverse = np.unique(np.concatenate((initial, updates), axis=1).T, axis=0, return_inverse=True)
-    rows, columns = coordinates.T
+    # Encode pairs in lexicographic order. Offsets preserve negative indices
+    # as distinct writes, just as sorting the original coordinate pairs does.
+    all_rows, all_columns = np.concatenate((initial, updates), axis=1)
+    if all_columns.size:
+        minimum = int(all_columns.min())
+        width = int(all_columns.max()) - minimum + 1
+        keys = all_rows.astype(np.int64) * width + (all_columns - minimum)
+        occupied, inverse = np.unique(keys, return_inverse=True)
+        rows, columns = np.divmod(occupied, width)
+        columns += minimum
+    else:
+        rows, columns, inverse = all_rows, all_columns, np.empty(0, dtype=np.intp)
     return PackedNoise(*(np.asarray(value) for value in (
         matrix[rows, columns], inverse[initial.shape[1]:], rows, columns,
     )))
